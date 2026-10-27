@@ -133,3 +133,19 @@
 1. Immediate mode (Begin/SetVertexData/End) so fades and overlays draw; then render-to-texture (the engine's 512x512 and 128x128 R5G6B5 targets).
 2. Play into a stage (scripted input) and fix what shows up; compare with xemu or real hardware screenshots where unsure.
 3. Then Phase 4 enhancements (launcher, widescreen via renderer slot 31, modern camera).
+
+## 2026-10-27 — Phase 3: immediate mode, render-to-texture; **playable in the Garage**
+
+- **Immediate mode** (`Begin`/`SetVertexData2f`/`SetVertexData4f`/`End`): the engine draws full-screen fades (0x151DA0: a strip with diffuse colour and stencil) and debug text (0x1522B0) this way, with FVF 0x1C4 (XYZRHW, diffuse, specular, 1 texcoord). Registers are the Xbox D3DVSDE numbers (0 position, 2 normal, 3 diffuse, 4 specular, 9-12 texcoords); -1 sets the position and emits the vertex. `d3d.c` keeps the current register values, collects vertices, packs them in the current FVF's layout at `End` and draws them like `DrawVerticesUP`. With the fades drawn, the logo screens run at 60 fps instead of 30.
+- **Render-to-texture:** each Xbox texture used as a target gets a host render-target texture at the render scale with its own D24S8 depth surface (found by data address; bound by `prepare_draw` wherever the game samples that texture, with texel scaling for linear formats). Clear, viewport/scissor, pre-transformed vertices and the 2D screen constant now use the current target's size and scale. **Not exercised yet:** no render target was set anywhere in the logos, title, attract mode, opening cutscene or Garage.
+- **`tools/contact_sheet.py`**: a labelled contact sheet of `shot_NNNNN.bmp` files (standard library only), for checking scripted runs at a glance.
+- **Playing (scripted input, 1280x960, 60 fps throughout, no errors):**
+  - Start on the title screen starts a new game: the opening event in the **GG's Garage** (letterboxed 3D cutscene with speech bubbles: "This is the GG's Garage. Hey, where's our pizza?");
+  - A advances the dialogue, then **gameplay**: Yoyo skates around the Garage with the HUD (health, spray cans, boost gauge), jumps, lands a "Method" trick that scores, and **grinds rails** with speed lines; the camera follows correctly;
+  - script used: `REJET_INPUT` with Start at 36-42 s, A every 1.5 s from 45 s, then chained `ls_up`/`ls_left`/`ls_right` presses (0.2 s each) to hold the stick.
+- **Known visual gaps:** no ground shadow under the characters, and the cel outlines look thin or missing; about 30 untextured draws per frame in the Garage (to check what they are); gamma ramps, tiling (`SetTile`/`GetTile`), z-bias, line width and multisample render states are still stubs; immediate mode with a vertex program isn't handled (not used so far).
+
+### Next
+1. Character shadows and outlines: find how the engine draws them (stencil, render target, or a texture pass) and what is missing.
+2. Explore further by script (leave the Garage into Shibuya-cho) and fix what shows up.
+3. Phase 4: a launcher and the enhancements (widescreen via renderer slot 31 and the camera angle at +0x74, modern camera, MSAA/anisotropy from ReWhacked).

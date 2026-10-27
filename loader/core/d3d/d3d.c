@@ -10,8 +10,8 @@
  * Implemented: device creation, Reset, Clear, Swap, the vertical blank, resources (textures,
  * surfaces, vertex/index buffers as Xbox-layout objects in game memory) and their locks, and,
  * from ReWhacked, NV2A vertex programs (vsh.c), register combiners (psh.c), textures (tex.c),
- * render and texture state, transforms, lights, viewport and draws. Not yet: render-to-texture,
- * immediate mode (Begin/SetVertexData/End), tiling, gamma; these are typed stubs. Pure helpers that only read static data or call the
+ * render and texture state, transforms, lights, viewport and draws; render-to-texture and
+ * immediate mode (Begin/SetVertexData/End). Not yet: tiling, gamma; these are typed stubs. Pure helpers that only read static data or call the
  * kernel (adapter queries, D3D_SetPushBufferSize, D3D_AllocContiguousMemory,
  * D3DResource_GetType/Register, XGRAPHC) keep running as original code. */
 #define WIN32_LEAN_AND_MEAN
@@ -48,6 +48,10 @@ static ULONG g_frame;
  * g_hw x g_hh (settings). Clear rectangles are given in game pixels and scaled. */
 static UINT g_xw = 640, g_xh = 480, g_hw = 640, g_hh = 480;
 static float g_sx = 1.0f, g_sy = 1.0f;
+/* The current render target (the back buffer or a texture): size in game pixels and host scale. */
+static UINT g_tw = 640, g_th = 480;
+static float g_tsx = 1.0f, g_tsy = 1.0f;
+static IDirect3DSurface9 *g_host_bb, *g_host_depth; /* the device's own, for switching back from a render target */
 static RECT g_vp_rect;   /* the Xbox viewport in render pixels (split screen) */
 static int g_vp_partial; /* viewport smaller than the screen: scissor and Clear use g_vp_rect */
 
@@ -243,6 +247,12 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
     g_vconst[VSH_C_SCREEN][0] = 2.0f / (float)w;
     g_vconst[VSH_C_SCREEN][1] = -2.0f / (float)h;
     g_vconst[VSH_C_SCREEN][2] = g_vconst[VSH_C_SCREEN][3] = 1.0f;
+    g_tw = w;
+    g_th = h;
+    g_tsx = g_sx;
+    g_tsy = g_sy;
+    IDirect3DDevice9Ex_GetRenderTarget(g_dev, 0, &g_host_bb);           /* for render-to-texture */
+    IDirect3DDevice9Ex_GetDepthStencilSurface(g_dev, &g_host_depth);
     /* no widescreen squeeze yet: 2D programs keep their x scale */
     g_vconst[VSH_C_2D][0] = g_vconst[VSH_C_2D][1] = g_vconst[VSH_C_2D][2] = g_vconst[VSH_C_2D][3] = 1.0f;
     log_printf("d3d: Direct3D 9Ex device ready, window %p\n", (void *)g_wnd);
@@ -291,10 +301,10 @@ static HRESULT XBAPI hle_D3DDevice_Clear(DWORD Count, const D3DRECT *pRects, DWO
         if (Count > 16)
             Count = 16;
         for (DWORD i = 0; i < Count; i++) {
-            r[i].x1 = (LONG)(pRects[i].x1 * g_sx);
-            r[i].y1 = (LONG)(pRects[i].y1 * g_sy);
-            r[i].x2 = (LONG)(pRects[i].x2 * g_sx);
-            r[i].y2 = (LONG)(pRects[i].y2 * g_sy);
+            r[i].x1 = (LONG)(pRects[i].x1 * g_tsx);
+            r[i].y1 = (LONG)(pRects[i].y1 * g_tsy);
+            r[i].x2 = (LONG)(pRects[i].x2 * g_tsx);
+            r[i].y2 = (LONG)(pRects[i].y2 * g_tsy);
         }
         return IDirect3DDevice9Ex_Clear(g_dev, Count, r, f, Color, Z, Stencil);
     }
@@ -1332,11 +1342,11 @@ static HRESULT XBAPI hle_D3DDevice_SetViewport(const D3DVIEWPORT9 *pViewport)
     const D3DVIEWPORT9 *v = pViewport;
     set_screen_constants(pViewport);
     if (g_dev) {
-        int full = v->X == 0 && v->Y == 0 && v->Width >= g_xw && v->Height >= g_xh;
-        g_vp_rect.left = (LONG)(v->X * g_sx + 0.5f);
-        g_vp_rect.top = (LONG)(v->Y * g_sy + 0.5f);
-        g_vp_rect.right = (LONG)((v->X + v->Width) * g_sx + 0.5f);
-        g_vp_rect.bottom = (LONG)((v->Y + v->Height) * g_sy + 0.5f);
+        int full = v->X == 0 && v->Y == 0 && v->Width >= g_tw && v->Height >= g_th;
+        g_vp_rect.left = (LONG)(v->X * g_tsx + 0.5f);
+        g_vp_rect.top = (LONG)(v->Y * g_tsy + 0.5f);
+        g_vp_rect.right = (LONG)((v->X + v->Width) * g_tsx + 0.5f);
+        g_vp_rect.bottom = (LONG)((v->Y + v->Height) * g_tsy + 0.5f);
         g_vp_partial = !full;
         if (g_vp_partial)
             IDirect3DDevice9Ex_SetScissorRect(g_dev, &g_vp_rect);
@@ -1350,14 +1360,89 @@ static HRESULT XBAPI hle_D3DDevice_SetViewport(const D3DVIEWPORT9 *pViewport)
     return S_OK;
 }
 
-/* Render targets: drawing into textures (the engine's 512x512 and 128x128 R5G6B5 targets) is
- * not done yet; everything goes to the back buffer, and the target texture keeps its contents. */
-static XD3DSurface *g_cur_rt;
+/* Render-to-texture. Each Xbox texture used as a render target (the engine's 512x512 and
+ * 128x128 LIN_R5G6B5 targets, set through renderer slot 42 and the camera apply methods) gets a
+ * host render-target texture at the render scale and its own depth surface (D3D9 needs depth at
+ * least as large as the target). It is found by the texture's data address (the same for the
+ * texture and its level-0 surface), and prepare_draw binds it wherever the game samples that
+ * texture. Linear formats are sampled with texel coordinates, so the game size gives the scale. */
+#define MAX_RT 64
+typedef struct RenderTarget {
+    DWORD data;          /* Xbox texture data address (the key) */
+    UINT w, h;           /* game size */
+    UINT hw, hh;         /* host size */
+    int linear;          /* texel-addressed format */
+    IDirect3DTexture9 *tex;
+    IDirect3DSurface9 *surf, *depth;
+} RenderTarget;
+static RenderTarget g_rt[MAX_RT];
+static unsigned g_rt_count;
+static const RenderTarget *g_cur_rt; /* NULL = the back buffer */
+
+static const RenderTarget *rt_find(DWORD data)
+{
+    for (unsigned i = 0; i < g_rt_count; i++)
+        if (g_rt[i].data == data)
+            return &g_rt[i];
+    return NULL;
+}
+
+static const RenderTarget *rt_get(const XD3DSurface *s)
+{
+    const XD3DPixelContainer *c = &s->Container;
+    uint32_t f = XFMT_FORMAT(c->Format);
+    RenderTarget *r;
+    const RenderTarget *found = rt_find(c->Resource.Data);
+    D3DFORMAT hf = (f == XD3DFMT_A8R8G8B8 || f == XD3DFMT_LIN_A8R8G8B8 || f == XD3DFMT_A4R4G4B4 ||
+                    f == XD3DFMT_LIN_A4R4G4B4 || f == XD3DFMT_A1R5G5B5 || f == XD3DFMT_LIN_A1R5G5B5)
+                       ? D3DFMT_A8R8G8B8 : D3DFMT_X8R8G8B8;
+    if (found)
+        return found;
+    if (g_rt_count >= MAX_RT || !c->Resource.Data)
+        return NULL;
+    r = &g_rt[g_rt_count];
+    memset(r, 0, sizeof *r);
+    r->data = c->Resource.Data;
+    r->w = c->Size ? XSIZE_WIDTH(c->Size) : 1u << XFMT_USIZE(c->Format);
+    r->h = c->Size ? XSIZE_HEIGHT(c->Size) : 1u << XFMT_VSIZE(c->Format);
+    r->linear = c->Size != 0;
+    r->hw = (UINT)(r->w * g_sx + 0.5f);
+    r->hh = (UINT)(r->h * g_sy + 0.5f);
+    if (r->hw > 4096)
+        r->hw = 4096;
+    if (r->hh > 4096)
+        r->hh = 4096;
+    if (FAILED(IDirect3DDevice9Ex_CreateTexture(g_dev, r->hw, r->hh, 1, D3DUSAGE_RENDERTARGET, hf, D3DPOOL_DEFAULT,
+                                                &r->tex, NULL)) ||
+        FAILED(IDirect3DTexture9_GetSurfaceLevel(r->tex, 0, &r->surf)) ||
+        FAILED(IDirect3DDevice9Ex_CreateDepthStencilSurface(g_dev, r->hw, r->hh, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0,
+                                                            TRUE, &r->depth, NULL))) {
+        log_printf("d3d: render target %ux%u (format %02X) could not be created\n", r->w, r->h, f);
+        return NULL;
+    }
+    log_printf("d3d: render target #%u: %ux%u format %02X%s at %08X -> host %ux%u\n", g_rt_count, r->w, r->h, f,
+               r->linear ? " (linear)" : "", r->data, r->hw, r->hh);
+    g_rt_count++;
+    return r;
+}
+
+/* Current target's size in game pixels and the host/game scale (Clear, viewport, scissor,
+ * pre-transformed vertices). */
+static void set_target_metrics(UINT w, UINT h, float sx, float sy)
+{
+    g_tw = w;
+    g_th = h;
+    g_tsx = sx;
+    g_tsy = sy;
+    g_vconst[VSH_C_SCREEN][0] = 2.0f / (float)w;
+    g_vconst[VSH_C_SCREEN][1] = -2.0f / (float)h;
+    g_vp_partial = 0;
+    IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_SCISSORTESTENABLE, FALSE);
+}
 
 static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, XD3DSurface *pNewZStencil)
 {
-    if (pRenderTarget)
-        g_cur_rt = pRenderTarget;
+    const RenderTarget *r;
     {
         SURVEY(12)
         log_printf("survey: SetRenderTarget %p%s fmt %08X size %08X, z %p%s (from %08X)\n", (void *)pRenderTarget,
@@ -1366,14 +1451,28 @@ static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, X
                    (void *)pNewZStencil, pNewZStencil == &g_depth ? " (depth)" : "",
                    (unsigned)(UINT_PTR)_ReturnAddress());
     }
+    if (!g_dev || !pRenderTarget)
+        return S_OK;
+    if (pRenderTarget == &g_backbuffer) {
+        if (g_cur_rt) {
+            IDirect3DDevice9Ex_SetRenderTarget(g_dev, 0, g_host_bb);
+            IDirect3DDevice9Ex_SetDepthStencilSurface(g_dev, pNewZStencil ? g_host_depth : NULL);
+            g_cur_rt = NULL;
+            set_target_metrics(g_xw, g_xh, g_sx, g_sy);
+        }
+        else {
+            IDirect3DDevice9Ex_SetDepthStencilSurface(g_dev, pNewZStencil ? g_host_depth : NULL);
+        }
+        return S_OK;
+    }
+    r = rt_get(pRenderTarget);
+    if (!r)
+        return S_OK;
+    IDirect3DDevice9Ex_SetRenderTarget(g_dev, 0, r->surf);
+    IDirect3DDevice9Ex_SetDepthStencilSurface(g_dev, pNewZStencil ? r->depth : NULL);
+    g_cur_rt = r;
+    set_target_metrics(r->w, r->h, (float)r->hw / (float)r->w, (float)r->hh / (float)r->h);
     return S_OK;
-}
-
-/* Is the current target the back buffer? Draws into other targets are skipped for now, so
- * render-to-texture passes don't land on the screen. */
-static int drawing_to_backbuffer(void)
-{
-    return !g_cur_rt || g_cur_rt == &g_backbuffer;
 }
 
 /* ------------------------------------------------------------------ textures and streams */
@@ -1425,10 +1524,6 @@ static int prepare_draw(void)
 {
     if (!g_dev)
         return 0;
-    if (!drawing_to_backbuffer()) {
-        g_skipped++;
-        return 0;
-    }
     if (!g_in_scene) {
         IDirect3DDevice9Ex_BeginScene(g_dev);
         g_in_scene = 1;
@@ -1452,7 +1547,18 @@ static int prepare_draw(void)
     for (DWORD s = 0; s < 4; s++) {
         float scale[2] = {1.0f, 1.0f};
         LONGLONG t0 = perf_now();
-        IDirect3DBaseTexture9 *t = g_textures[s] ? tex_get((IDirect3DDevice9 *)g_dev, g_textures[s], scale) : NULL;
+        const RenderTarget *rt = g_textures[s] ? rt_find(g_textures[s]->Resource.Data) : NULL;
+        IDirect3DBaseTexture9 *t;
+        if (rt) { /* drawn by the game into a render target: sample the host copy */
+            t = (IDirect3DBaseTexture9 *)rt->tex;
+            if (rt->linear) {
+                scale[0] = 1.0f / (float)rt->w;
+                scale[1] = 1.0f / (float)rt->h;
+            }
+        }
+        else {
+            t = g_textures[s] ? tex_get((IDirect3DDevice9 *)g_dev, g_textures[s], scale) : NULL;
+        }
         perf_end(PERF_TEX, t0);
         IDirect3DDevice9Ex_SetTexture(g_dev, s, t);
         g_vconst[VSH_C_TEXSCALE + s][0] = scale[0];
@@ -1539,7 +1645,7 @@ static const BYTE *scale_rhw(const BYTE *verts, UINT first, UINT last, UINT stri
     static BYTE *buf;
     static size_t cap;
     size_t need = (size_t)(last + 1) * stride;
-    if ((g_cur_vs & 1) || (g_cur_vs & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW || (g_sx == 1.0f && g_sy == 1.0f))
+    if ((g_cur_vs & 1) || (g_cur_vs & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW || (g_tsx == 1.0f && g_tsy == 1.0f))
         return verts;
     if (need > cap) {
         BYTE *n = (BYTE *)realloc(buf, need);
@@ -1551,8 +1657,8 @@ static const BYTE *scale_rhw(const BYTE *verts, UINT first, UINT last, UINT stri
     for (UINT i = first; i <= last; i++) {
         float *xy = (float *)(buf + (size_t)i * stride);
         memcpy(xy, verts + (size_t)i * stride, stride);
-        xy[0] *= g_sx;
-        xy[1] *= g_sy;
+        xy[0] *= g_tsx;
+        xy[1] *= g_tsy;
     }
     return buf;
 }
@@ -1636,6 +1742,103 @@ static void XBAPI hle_D3DDevice_DrawIndexedVertices(DWORD PrimitiveType, UINT Ve
         draw_up(PrimitiveType, VertexCount, v + (SIZE_T)g_base_vertex * g_stream_stride, g_stream_stride, pIndexData);
 }
 
+/* ------------------------------------------------------------------ immediate mode */
+
+/* Begin(type) / SetVertexData*(register, ...) / End(): the engine draws full-screen fades
+ * (0x151DA0, a strip with diffuse colour and stencil) and debug text (0x1522B0, textured quads)
+ * this way, with FVF 0x1C4 (XYZRHW, diffuse, specular, one texcoord). Registers are the Xbox
+ * D3DVSDE_* numbers: 0 position, 2 normal, 3 diffuse, 4 specular, 9..12 texcoords; -1 (VERTEX)
+ * sets the position and emits a vertex with the current values of the others. At End the
+ * vertices are packed in the current FVF's layout and drawn like DrawVerticesUP. */
+#define IMM_MAX 4096
+static float g_imm_reg[16][4];
+static float g_imm_vtx[IMM_MAX][16][4];
+static UINT g_imm_count;
+static DWORD g_imm_prim;
+
+static void XBAPI hle_D3DDevice_Begin(DWORD PrimitiveType)
+{
+    g_imm_prim = PrimitiveType;
+    g_imm_count = 0;
+}
+
+static void imm_set(INT Register, float a, float b, float c, float d)
+{
+    int r = Register < 0 ? 0 : Register;
+    if (r >= 16)
+        return;
+    g_imm_reg[r][0] = a;
+    g_imm_reg[r][1] = b;
+    g_imm_reg[r][2] = c;
+    g_imm_reg[r][3] = d;
+    if (Register < 0 && g_imm_count < IMM_MAX) /* D3DVSDE_VERTEX: emit */
+        memcpy(g_imm_vtx[g_imm_count++], g_imm_reg, sizeof g_imm_reg);
+}
+
+static void XBAPI hle_D3DDevice_SetVertexData2f(INT Register, float a, float b)
+{
+    imm_set(Register, a, b, 0.0f, 1.0f);
+}
+
+static void XBAPI hle_D3DDevice_SetVertexData4f(INT Register, float a, float b, float c, float d)
+{
+    imm_set(Register, a, b, c, d);
+}
+
+static DWORD imm_color(const float *v) /* (r, g, b, a) in 0..1 -> D3DCOLOR */
+{
+    DWORD out = 0;
+    static const int shift[4] = {16, 8, 0, 24};
+    for (int i = 0; i < 4; i++) {
+        float x = v[i] < 0.0f ? 0.0f : v[i] > 1.0f ? 1.0f : v[i];
+        out |= (DWORD)(x * 255.0f + 0.5f) << shift[i];
+    }
+    return out;
+}
+
+static void XBAPI hle_D3DDevice_End(void)
+{
+    static BYTE buf[IMM_MAX * 64];
+    DWORD fvf = g_cur_vs;
+    UINT stride = 0, ntex;
+    BYTE *p = buf;
+    if (!g_imm_count)
+        return;
+    if (fvf & 1) { /* a vertex program: not used this way by JSRF so far */
+        TODO_ONCE("immediate mode with a vertex program");
+        return;
+    }
+    ntex = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+    for (UINT i = 0; i < g_imm_count; i++) {
+        float (*v)[4] = g_imm_vtx[i];
+        BYTE *start = p;
+        switch (fvf & D3DFVF_POSITION_MASK) {
+        case D3DFVF_XYZRHW: memcpy(p, v[0], 16); p += 16; break;
+        case D3DFVF_XYZ: memcpy(p, v[0], 12); p += 12; break;
+        default: TODO_ONCE("immediate mode with this FVF position type"); return;
+        }
+        if (fvf & D3DFVF_NORMAL) {
+            memcpy(p, v[2], 12);
+            p += 12;
+        }
+        if (fvf & D3DFVF_DIFFUSE) {
+            *(DWORD *)p = imm_color(v[3]);
+            p += 4;
+        }
+        if (fvf & D3DFVF_SPECULAR) {
+            *(DWORD *)p = imm_color(v[4]);
+            p += 4;
+        }
+        for (UINT t = 0; t < ntex && t < 4; t++) {
+            memcpy(p, v[9 + t], 8);
+            p += 8;
+        }
+        stride = (UINT)(p - start);
+    }
+    draw_up(g_imm_prim, g_imm_count, buf, stride, NULL);
+    g_imm_count = 0;
+}
+
 /* ------------------------------------------------------------------ not yet implemented */
 
 /* Typed stubs: each pops exactly the argument bytes the original does (config/d3d_abi.csv),
@@ -1657,10 +1860,6 @@ STUB(DisplayQuery_18E120, 0, D a)
 STUB(CopyRects, 0, D a, D b, D c, D d, D e)
 STUB(GetTexture2, 0, D a, D b)
 STUB(SetRenderState_1arg, 0, D a)
-STUB(SetVertexData2f, 0, D a, D b, D c)                /* immediate mode (Begin/SetVertexData/End) */
-STUB(SetVertexData4f, 0, D a, D b, D c, D d, D e)
-STUB(Begin, 0, D a)
-STUB(End, 0, void)
 #undef D
 #undef STUB
 #pragma warning(pop)
@@ -1730,10 +1929,10 @@ const HlePatch g_d3d_patches[] = {
     P(D3DDevice_DrawIndexedVerticesUP, hle_D3DDevice_DrawIndexedVerticesUP),
     P(D3DDevice_DrawVertices, hle_D3DDevice_DrawVertices),
     P(D3DDevice_DrawIndexedVertices, hle_D3DDevice_DrawIndexedVertices),
-    P(D3DDevice_SetVertexData2f, stub_SetVertexData2f),
-    P(D3DDevice_SetVertexData4f, stub_SetVertexData4f),
-    P(D3DDevice_Begin, stub_Begin),
-    P(D3DDevice_End, stub_End),
+    P(D3DDevice_SetVertexData2f, hle_D3DDevice_SetVertexData2f),
+    P(D3DDevice_SetVertexData4f, hle_D3DDevice_SetVertexData4f),
+    P(D3DDevice_Begin, hle_D3DDevice_Begin),
+    P(D3DDevice_End, hle_D3DDevice_End),
     /* render and texture state */
     P(D3DDevice_SetRenderState_Simple, hle_D3DDevice_SetRenderState_Simple),
     P(D3DDevice_SetRenderState_CullMode, hle_D3DDevice_SetRenderState_CullMode),

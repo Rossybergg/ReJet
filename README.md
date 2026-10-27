@@ -2,7 +2,7 @@
 
 Play **Jet Set Radio Future** (Smilebit / Sega, Xbox, 2002) natively on Windows, from your own disc, with modern enhancements.
 
-> **Status: early work in progress.** The game starts and draws its logos, title screen and attract mode in 3D at up to 60 fps, with music, and the controller and keyboard work. Some effects (fades, render-to-texture) are still missing, and gameplay hasn't been tried yet. See [docs/PROGRESS.md](docs/PROGRESS.md).
+> **Status: early work in progress, but playable in places.** The game starts, a new game begins, and you can skate, jump, trick and grind in the GG's Garage at 60 fps with music, using a controller or the keyboard. Character shadows are missing, and only the opening area has been tried. See [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ReJet is a **hybrid host**, built the same way as its sister project ReWhacked: a loader maps the original `default.xbe` at its own addresses, implements the Xbox kernel, and replaces the Xbox system libraries (Direct3D 8, DirectSound, controllers) with PC equivalents. The game's own code runs unchanged; enhancements hook specific game functions, each behind a switch.
 
