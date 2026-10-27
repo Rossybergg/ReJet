@@ -33,3 +33,13 @@
   - So the shim worklist is the engine layer's XDK calls, and the engine layer is the natural place for enhancement hooks (projection, viewport, present, input), much like ReWhacked's renderer vtable.
   - Unlike Whacked!, part of the code (the engine maths) is SSE: any later rewrite there must keep SSE semantics, not just `/arch:IA32`.
 - Next (Phase 1 continued): name the engine layer's entry points (renderer, sound, input), and locate video mode / present parameters, projection and viewport, the controller poll, the game timer and the Z: cache install.
+
+## 2026-10-27 — Phase 1: engine layer mapped (`docs/SUBSYSTEMS.md`)
+
+- The engine layer is COM-style C++ (interface GUIDs, QueryInterface): a PC-style renderer (vtable 0x1E6BA0, 121 slots), an input manager and pads with DirectInput-style state, and a sound object over DSOUND.
+- **Video:** the game asks for 640x480, **16-bit colour**, 2 back buffers, vsync (`0x5FA70`). Device creation `0x157510`; mode pick `0x157400`.
+- **Projection:** renderer slot 31 `0x154A40` takes a Sega-style angle (0x4000 = 90°) and near/far; the horizontal FOV is fixed, so wider viewports would be Vert-. Hor+ = one hook on slot 31. Matrix builder `0x154920`, cached at 0x26B7B8.
+- **Timing:** no game delta timer found; QPC is used for profiling and load timeouts only, so logic is probably one step per frame at vsync. The CRI ADX server runs on its own thread once per vblank (`0x13BC70`), so the loader's vblank must be steady. PAL 50 Hz would be slower unless PAL60.
+- **Input:** pad poll `0x167C50` (pad vtable 0x1E94C8, slot 25), with rumble via `XInputSetState`.
+- **Sound:** DirectSound create `0x168F80`, per-frame work `0x169050`, 3D voice parameters `0x16DF00`; ADX fills its own buffers.
+- Next: Z: cache install, the camera, language and 50/60 Hz selection; then Phase 2 (copy and adapt the loader).
