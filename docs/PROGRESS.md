@@ -52,3 +52,29 @@
 - **Z: cache:** copy-on-read through `0x262E0`/`0x25910` (async, overlapped + unbuffered opens, write to `name~` then rename) and a background installer `0x25550` over 9 slots with `JSRF_CACHE_COMPLETE%02d.CMP` markers. The loader needs overlapped I/O and full sharing, and must not use host unbuffered I/O.
 - **Camera:** MMATRIX is a Sega-style matrix stack, with LookAt at `0x1BBA30`. Six camera classes (vtables 0x1CB800–0x1CBA90) each set the viewport, call SetProjection with their own angle (+0x74; near 1, far 5000) and call LookAt. These are the hooks for per-camera widescreen and modern camera controls. Which class is the gameplay camera is found at runtime.
 - Details are in `docs/SUBSYSTEMS.md`. **Phase 1 is done.** Next: Phase 2, copy and adapt ReWhacked's loader.
+
+## 2026-10-27 — Phase 2: loader copied and adapted
+
+- Copied from ReWhacked: the stub exe (`loader/stub`, `/BASE:0x10000` reservation), `loader.c` (XBE mapping, chimera PE header, crash logging), `emu_thread.c` (fs:/TLS), the kernel (`kernel/*.c`), the HLE framework, `perf.c`, and the generators `gen_kernel.py` and `gen_fs_patches.py`. Not copied yet: the D3D, DSOUND, XPP and network shims, the game hooks and the launcher. Their patch tables assume XDK 4831 calling conventions and data layouts and come over one by one in Phase 3.
+- Names: `ReJetLoader.exe`, `rejet.dll`, `rejet.ini`, `REJET_*` debug switches, `%LOCALAPPDATA%\rejet\hdd`.
+- **New `tools/loader/gen_xdk_addrs.py`** → `loader/core/xdk_addrs.gen.h`: a `#define` for each of the 401 uniquely named library functions in `config/functions.csv`, so patch tables refer to `XDK_XAPILIB_QueryPerformanceCounter` rather than a bare number.
+- `hle.c`: JSRF's XBE SHA-1; the QueryPerformanceCounter patch (XDK 4134's XAPI is `rdtsc` with a constant 733,333,333 frequency, as in 4831) and SetThreadPriority.
+- `kernel/hal.c`: a PAL console (AV region PAL-I, game region "rest of world", which the XBE allows), the language from `[Console] Language` (default English) and the PAL60 video flag from `[Console] PAL60` (default on, so the game runs at 60 Hz).
+- `kernel/io.c`, for JSRF's Z: cache: host opens drop `FILE_NO_INTERMEDIATE_BUFFERING` (the game's buffers are aligned for the Xbox, not the host disk), and `NtSetInformationFile` supports FileRenameInformation (Xbox ANSI path → host UTF-16 NT path), for its `name~` → `name` renames.
+- `loader.c`: the code range used for backtraces and fault filtering now comes from the XBE (headers to the kernel thunk at the start of `.rdata`) instead of Whacked!'s constants.
+- `gen_kernel.py` only notes kernel functions that the loader implements but this XBE doesn't import (21 that Whacked! needed). JSRF: 120 imports, 100 implemented, 10 stubbed, 10 data. `gen_fs_patches.py`: 24 `fs:` sites (XAPI, DSOUND, CRT, ADX and engine regions).
+- Builds clean with `tools\loader\build.bat` (VS 2026, x86).
+- `kernel/rtl.c`: JSRF's XAPI has **statically pre-initialised critical sections** (for example the thread-notify lock at 0x234848 starts with the kernel event header `0x00040001`, type 1, size 4), where Whacked!'s were all zero. The loader keeps its host lock pointer in that first dword, so it took the header for a pointer and Windows raised `C0000008` (invalid handle) on the first RtlEnterCriticalSection. Now zero or any unaligned value (malloc'd pointers are 8-byte aligned) means "not set up yet".
+
+### Phase 2 result (2026-10-27)
+
+`play.bat` (or `build\loader\ReJetLoader.exe %USERPROFILE%\GameData\JSRF\default.xbe [seconds]`, disc extracted with `tools\xiso.py extract-all`):
+- all 11 sections mapped at their original addresses, 120/120 kernel thunks patched, TLS set up, 24 `fs:` sites redirected, 2 HLE patches;
+- XAPI start-up completes: `T:`, `U:` and `Z:` mounted (`%LOCALAPPDATA%\rejet\hdd`), TitleMeta/TitleImage/SaveImage written, heaps allocated;
+- the game's static initialiser reads the console settings (language 1 = English, AV region PAL-I, PAL60 video flag), and `AvSendTVEncoderOption` is called twice;
+- the game reaches its **renderer setup** (`0x5FA70`; the 640x480, 16 bpp display descriptor is on the stack). Device creation fails because the original XDK D3D has no GPU, and the game then reads a null renderer pointer at `0x5FC12`. This is where Phase 3 starts: the D3D8 → Direct3D 9Ex shim.
+
+### Next (Phase 3)
+1. Port the D3D shim from ReWhacked for XDK 4134. Run `tools/loader/d3d_abi.py` on this XBE to derive each function's calling convention, find D3D's render-state and texture-state arrays and dirty flags, check the resource header layout, and use `XDK_D3D8_*` names in the patch table. First goal: the device creates, and Clear + Swap show a window.
+2. Then the DSOUND mixer (ADX sits on top of it) and XPP → XInput, each re-checked the same way.
+3. Run with `REJET_TRACE=1` after each step; the first unimplemented kernel call stops with a `KERNEL <ordinal>` line.
