@@ -12,6 +12,9 @@ typedef struct Settings {
     int width, height; /* render resolution (default 1280x960; the Xbox renders 640x480) */
     int window_scale;  /* window size in percent of the render size (default 100) */
     int vsync;         /* 1 = wait for the monitor's refresh when presenting */
+    /* [Audio] */
+    int volume;             /* master volume in percent (default 100) */
+    int mute_in_background; /* silent while another program has the focus */
     /* [Console] */
     int language;  /* GAME_LANG_* (default English) */
     int pal60;     /* 1 = report the PAL60 video flag so the game runs at 60 Hz (default); 0 = PAL 50 Hz */

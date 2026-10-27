@@ -8,6 +8,7 @@
 
 Settings g_settings = {
     1280, 960, 100, 1,    /* display */
+    100, 0,               /* audio */
     GAME_LANG_ENGLISH, 1, /* console */
 };
 
@@ -38,6 +39,8 @@ void settings_load(void)
     GET("Display", "Height", height, 240, 4320);
     GET("Display", "WindowScale", window_scale, 25, 400);
     GET("Display", "VSync", vsync, 0, 1);
+    GET("Audio", "Volume", volume, 0, 100);
+    GET("Audio", "MuteInBackground", mute_in_background, 0, 1);
     GET("Console", "Language", language, GAME_LANG_JAPANESE, GAME_LANG_ITALIAN);
     GET("Console", "PAL60", pal60, 0, 1);
 #undef GET

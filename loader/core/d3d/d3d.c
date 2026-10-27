@@ -293,13 +293,34 @@ static void run_vblank_callbacks(void)
     LeaveCriticalSection(&g_vblank_lock);
 }
 
-/* Wait for the next vertical blank boundary. */
+/* Wait for the next vertical blank boundary. This must really sleep: CRI ADX raises its vblank
+ * thread's priority, and a spinning wait (Sleep(0)) at that priority starved the normal-priority
+ * threads XAudio2 needs, so CreateMasteringVoice never returned and the process could not exit.
+ * Each waiting thread sleeps on its own high-resolution waitable timer until the boundary. */
+static __declspec(thread) HANDLE t_vblank_timer;
+
 static void wait_vblank(void)
 {
     ULONG start = vblank_now();
+    LARGE_INTEGER now, due;
     run_vblank_callbacks();
-    while (vblank_now() <= start)
-        Sleep(0);
+    if (!t_vblank_timer) {
+        t_vblank_timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        if (!t_vblank_timer) /* older Windows: a normal timer (about 1 ms resolution with timeBeginPeriod) */
+            t_vblank_timer = CreateWaitableTimerW(NULL, FALSE, NULL);
+    }
+    for (;;) {
+        LONGLONG boundary = g_vblank_start.QuadPart + ((LONGLONG)(start + 1) * g_qpf.QuadPart + g_vblank_hz - 1) / g_vblank_hz;
+        QueryPerformanceCounter(&now);
+        if (now.QuadPart >= boundary)
+            break;
+        /* relative due time in 100 ns units (negative) */
+        due.QuadPart = -(LONGLONG)((boundary - now.QuadPart) * 10000000 / g_qpf.QuadPart);
+        if (due.QuadPart == 0 || !t_vblank_timer || !SetWaitableTimer(t_vblank_timer, &due, 0, NULL, NULL, FALSE))
+            Sleep(1);
+        else
+            WaitForSingleObject(t_vblank_timer, INFINITE);
+    }
     run_vblank_callbacks();
 }
 
@@ -358,7 +379,7 @@ static DWORD XBAPI hle_D3DDevice_Swap(DWORD Flags)
     perf_end(PERF_PRESENT, t0);
     g_frame++;
     if (g_frame <= 3 || g_frame % 600 == 0)
-        log_printf("d3d: frame %lu (Swap flags %lX)\n", g_frame, Flags);
+        log_printf("d3d: frame %lu at vblank %lu (Swap flags %lX)\n", g_frame, vblank_now(), Flags);
     return g_frame;
 }
 

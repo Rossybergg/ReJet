@@ -297,6 +297,7 @@ NTSTATUS XBAPI xbox_NtReadFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine
                                PIO_STATUS_BLOCK_X IoStatusBlock, PVOID Buffer, ULONG Length, PLARGE_INTEGER ByteOffset);
 NTSTATUS XBAPI xbox_NtWriteFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine, PVOID ApcContext,
                                 PIO_STATUS_BLOCK_X IoStatusBlock, PVOID Buffer, ULONG Length, PLARGE_INTEGER ByteOffset);
+VOID XBAPI xbox_NtUserIoApcDispatcher(PVOID ApcContext, PIO_STATUS_BLOCK_X IoStatusBlock, ULONG Reserved);
 NTSTATUS XBAPI xbox_NtQueryInformationFile(HANDLE FileHandle, PIO_STATUS_BLOCK_X IoStatusBlock, PVOID FileInformation,
                                            ULONG Length, ULONG FileInformationClass);
 NTSTATUS XBAPI xbox_NtSetInformationFile(HANDLE FileHandle, PIO_STATUS_BLOCK_X IoStatusBlock, PVOID FileInformation,

@@ -7,6 +7,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
+#include <intrin.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -180,6 +182,71 @@ static void log_exception(EXCEPTION_POINTERS *ep)
         log_memory("esi", c->Esi);
         log_memory("edi", c->Edi);
     }
+}
+
+/* Hang diagnostics: who owns the loader lock (PEB+0xA0 -> RTL_CRITICAL_SECTION, owner at +0xC),
+ * and for every other thread its instruction pointer (module + offset) and an XBE backtrace.
+ * Written on timeout (before ExitProcess, which needs the loader lock) and after
+ * REJET_HANGDUMP=<seconds>. */
+static void log_module_address(const char *what, DWORD addr)
+{
+    HMODULE m = NULL;
+    char name[MAX_PATH] = "?";
+    if (addr >= g_code_lo && addr < g_code_hi) {
+        log_printf(" %s %08lX (xbe)", what, addr);
+        return;
+    }
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)(UINT_PTR)addr, &m) && m) {
+        char *slash;
+        GetModuleFileNameA(m, name, MAX_PATH);
+        slash = strrchr(name, '\\');
+        log_printf(" %s %s+%lX", what, slash ? slash + 1 : name, addr - (DWORD)(UINT_PTR)m);
+        return;
+    }
+    log_printf(" %s %08lX", what, addr);
+}
+
+static void dump_threads(const char *why)
+{
+    const unsigned char *peb = (const unsigned char *)(UINT_PTR)__readfsdword(0x30);
+    const RTL_CRITICAL_SECTION *ll = *(RTL_CRITICAL_SECTION *const *)(peb + 0xA0);
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    THREADENTRY32 te;
+    DWORD self = GetCurrentThreadId();
+    log_printf("threads (%s): loader lock owner %lu, lock count %ld\n", why,
+               (unsigned long)(UINT_PTR)ll->OwningThread, ll->LockCount);
+    if (snap == INVALID_HANDLE_VALUE)
+        return;
+    te.dwSize = sizeof te;
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        HANDLE h;
+        CONTEXT c;
+        if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == self)
+            continue;
+        h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
+        if (!h)
+            continue;
+        SuspendThread(h);
+        memset(&c, 0, sizeof c);
+        c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        if (GetThreadContext(h, &c)) {
+            log_printf("  thread %lu prio %d:", te.th32ThreadID, GetThreadPriority(h));
+            log_module_address("eip", c.Eip);
+            log_printf(" esp %08lX\n", c.Esp);
+            log_backtrace((const void *)(UINT_PTR)c.Esp, 10);
+        }
+        ResumeThread(h);
+        CloseHandle(h);
+    }
+    CloseHandle(snap);
+}
+
+static DWORD WINAPI hangdump_thread(void *arg)
+{
+    Sleep((DWORD)(UINT_PTR)arg * 1000);
+    dump_threads("REJET_HANGDUMP");
+    return 0;
 }
 
 static unsigned char *read_file(const char *path, DWORD *size)
@@ -374,6 +441,11 @@ static int run(void *image_base, unsigned image_size)
     io_init(xbe_path);
     xc_selftest();
 
+    {
+        char env[16] = "";
+        if (GetEnvironmentVariableA("REJET_HANGDUMP", env, sizeof env) && atoi(env) > 0)
+            CloseHandle(CreateThread(NULL, 0, hangdump_thread, (void *)(UINT_PTR)atoi(env), 0, NULL));
+    }
     AddVectoredExceptionHandler(1, on_exception);
     SetUnhandledExceptionFilter(on_unhandled);
     thread = CreateThread(NULL, 1 << 20, run_entry, entry, 0, NULL);
@@ -388,6 +460,7 @@ static int run(void *image_base, unsigned image_size)
         Sleep(INFINITE);
     Sleep(run_seconds * 1000);
     log_printf("timeout: stopping after %u s\n", run_seconds);
+    dump_threads("timeout");
     return 0;
 }
 

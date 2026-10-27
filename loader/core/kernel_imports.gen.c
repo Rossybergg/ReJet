@@ -86,7 +86,7 @@ static NTSTATUS XBAPI ktw_NtResumeThread(HANDLE ThreadHandle, PULONG PreviousSus
 static NTSTATUS XBAPI ktw_NtSetEvent(HANDLE EventHandle, PLONG PreviousState) { NTSTATUS r = xbox_NtSetEvent(EventHandle, PreviousState); ktrace_call("NtSetEvent", _ReturnAddress(), 1, (unsigned long long)r); return r; }
 static NTSTATUS XBAPI ktw_NtSetInformationFile(HANDLE FileHandle, PIO_STATUS_BLOCK_X IoStatusBlock, PVOID FileInformation, ULONG Length, ULONG FileInformationClass) { NTSTATUS r = xbox_NtSetInformationFile(FileHandle, IoStatusBlock, FileInformation, Length, FileInformationClass); ktrace_call("NtSetInformationFile", _ReturnAddress(), 1, (unsigned long long)r); return r; }
 static NTSTATUS XBAPI ktw_NtSuspendThread(HANDLE ThreadHandle, PULONG PreviousSuspendCount) { NTSTATUS r = xbox_NtSuspendThread(ThreadHandle, PreviousSuspendCount); ktrace_call("NtSuspendThread", _ReturnAddress(), 1, (unsigned long long)r); return r; }
-static void __cdecl kstub_232(void) { kernel_unimplemented(232, _ReturnAddress(), _AddressOfReturnAddress()); }
+static VOID XBAPI ktw_NtUserIoApcDispatcher(PVOID ApcContext, PIO_STATUS_BLOCK_X IoStatusBlock, ULONG Reserved) { xbox_NtUserIoApcDispatcher(ApcContext, IoStatusBlock, Reserved); ktrace_call("NtUserIoApcDispatcher", _ReturnAddress(), 0, 0); }
 static NTSTATUS XBAPI ktw_NtWaitForSingleObject(HANDLE Handle, BOOLEAN Alertable, PLARGE_INTEGER Timeout) { NTSTATUS r = xbox_NtWaitForSingleObject(Handle, Alertable, Timeout); ktrace_call("NtWaitForSingleObject", _ReturnAddress(), 1, (unsigned long long)r); return r; }
 static NTSTATUS XBAPI ktw_NtWaitForSingleObjectEx(HANDLE Handle, KPROCESSOR_MODE WaitMode, BOOLEAN Alertable, PLARGE_INTEGER Timeout) { NTSTATUS r = xbox_NtWaitForSingleObjectEx(Handle, WaitMode, Alertable, Timeout); ktrace_call("NtWaitForSingleObjectEx", _ReturnAddress(), 1, (unsigned long long)r); return r; }
 static NTSTATUS XBAPI ktw_NtWaitForMultipleObjectsEx(ULONG Count, HANDLE *Handles, ULONG WaitType, KPROCESSOR_MODE WaitMode, BOOLEAN Alertable, PLARGE_INTEGER Timeout) { NTSTATUS r = xbox_NtWaitForMultipleObjectsEx(Count, Handles, WaitType, WaitMode, Alertable, Timeout); ktrace_call("NtWaitForMultipleObjectsEx", _ReturnAddress(), 1, (unsigned long long)r); return r; }
@@ -207,7 +207,7 @@ const KernelImport g_kernel_imports[] = {
     { 225, "NtSetEvent", (void *)xbox_NtSetEvent, (void *)ktw_NtSetEvent, 0 },
     { 226, "NtSetInformationFile", (void *)xbox_NtSetInformationFile, (void *)ktw_NtSetInformationFile, 0 },
     { 231, "NtSuspendThread", (void *)xbox_NtSuspendThread, (void *)ktw_NtSuspendThread, 0 },
-    { 232, "NtUserIoApcDispatcher", (void *)kstub_232, (void *)kstub_232, 0 },
+    { 232, "NtUserIoApcDispatcher", (void *)xbox_NtUserIoApcDispatcher, (void *)ktw_NtUserIoApcDispatcher, 0 },
     { 233, "NtWaitForSingleObject", (void *)xbox_NtWaitForSingleObject, (void *)ktw_NtWaitForSingleObject, 0 },
     { 234, "NtWaitForSingleObjectEx", (void *)xbox_NtWaitForSingleObjectEx, (void *)ktw_NtWaitForSingleObjectEx, 0 },
     { 235, "NtWaitForMultipleObjectsEx", (void *)xbox_NtWaitForMultipleObjectsEx, (void *)ktw_NtWaitForMultipleObjectsEx, 0 },

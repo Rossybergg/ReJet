@@ -418,6 +418,26 @@ NTSTATUS XBAPI xbox_NtWriteFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutin
     return p_NtWriteFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer, Length, ByteOffset, NULL);
 }
 
+/* XAPI's ReadFileEx/WriteFileEx pass this kernel export as the APC routine and the caller's
+ * completion routine as its context. The reads go to host NtReadFile, so Windows calls it
+ * (an APC on the issuing Xbox thread, in an alertable wait) with the host IO_STATUS_BLOCK,
+ * which is the start of the caller's OVERLAPPED. JSRF's engine file reader (0x17B034) uses it.
+ * Like the Xbox kernel: call the completion routine with the Win32 error, the bytes moved and
+ * the OVERLAPPED. */
+typedef VOID(XBAPI *XOVERLAPPED_COMPLETION_ROUTINE)(DWORD dwErrorCode, DWORD dwNumberOfBytesTransfered,
+                                                    void *lpOverlapped);
+
+VOID XBAPI xbox_NtUserIoApcDispatcher(PVOID ApcContext, PIO_STATUS_BLOCK_X IoStatusBlock, ULONG Reserved)
+{
+    XOVERLAPPED_COMPLETION_ROUTINE done = (XOVERLAPPED_COMPLETION_ROUTINE)ApcContext;
+    DWORD err = IoStatusBlock->Status >= 0 ? 0 : xbox_RtlNtStatusToDosError(IoStatusBlock->Status);
+    (void)Reserved;
+    KTRACE("NtUserIoApcDispatcher(routine %p, status %08lX, %lu bytes)\n", ApcContext, IoStatusBlock->Status,
+           (unsigned long)IoStatusBlock->Information);
+    if (done)
+        done(err, (DWORD)IoStatusBlock->Information, IoStatusBlock);
+}
+
 /* Information classes whose structures are identical on Xbox and Windows (no file names). */
 static int same_layout_file_class(ULONG c)
 {

@@ -2,7 +2,7 @@
 
 Play **Jet Set Radio Future** (Smilebit / Sega, Xbox, 2002) natively on Windows, from your own disc, with modern enhancements.
 
-> **Status: early work in progress.** The loader opens a window and creates the graphics device, but the game doesn't start yet (it needs the sound layer, which is next). There is no picture or sound yet. See [docs/PROGRESS.md](docs/PROGRESS.md).
+> **Status: early work in progress.** The game starts, runs at 60 Hz, reaches its title screen and plays the title music, and the controller and keyboard work. There is no picture yet: drawing is the next step. See [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ReJet is a **hybrid host**, built the same way as its sister project ReWhacked: a loader maps the original `default.xbe` at its own addresses, implements the Xbox kernel, and replaces the Xbox system libraries (Direct3D 8, DirectSound, controllers) with PC equivalents. The game's own code runs unchanged; enhancements hook specific game functions, each behind a switch.
 
@@ -17,7 +17,7 @@ Requirements: Windows 10/11, Visual Studio 2026 with **Desktop development with 
 
 1. Build: `tools\loader\build.bat` (writes `build\loader\ReJetLoader.exe` and `rejet.dll`).
 2. Extract your disc: `python tools\xiso.py extract-all path\to\your.iso %USERPROFILE%\GameData\JSRF`.
-3. Run: `play.bat`. The log is `build\loader\loader.log`. Settings (`[Display] Width`, `Height`, `WindowScale`, `VSync`; `[Console] Language`, `PAL60`) go in `rejet.ini` next to the loader.
+3. Run: `play.bat`. The log is `build\loader\loader.log`. Settings (`[Display] Width`, `Height`, `WindowScale`, `VSync`; `[Audio] Volume`, `MuteInBackground`; `[Console] Language`, `PAL60`) go in `rejet.ini` next to the loader.
 
 ## Repository layout
 

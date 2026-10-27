@@ -60,8 +60,45 @@ void emu_arm_watchpoint(void)
     SetThreadContext(GetCurrentThread(), &c);
 }
 
+/* The Xbox has one CPU, and some of its code depends on that. CRI ADX makes a lock out of
+ * thread priorities (0x13BB50: raise the caller to 15, then resume a priority-2 spinner,
+ * 0x13BC30, so no thread at priority 1 or below can run; 0x13BB90 suspends it again). On
+ * several cores that excludes nothing and the spinner takes a core. So every thread that runs
+ * Xbox code (XAPI threads, the entry thread, kernel DPC/timer threads) shares one host core,
+ * with Windows' priority scheduling standing in for the Xbox's; host threads (window, D3D,
+ * mixer, XAudio2) use the others. REJET_XBOXCPU=<n> picks the core, =all turns this off. */
+static DWORD_PTR xbox_cpu_mask(void)
+{
+    static DWORD_PTR mask = (DWORD_PTR)-1;
+    if (mask == (DWORD_PTR)-1) {
+        DWORD_PTR proc = 0, sys = 0;
+        char env[8] = "";
+        mask = 0;
+        GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys);
+        if (GetEnvironmentVariableA("REJET_XBOXCPU", env, sizeof env) && !_stricmp(env, "all")) {
+            log_printf("emu: Xbox threads on all cores (REJET_XBOXCPU=all)\n");
+        }
+        else if (env[0] && (proc & ((DWORD_PTR)1 << (atoi(env) & 31)))) {
+            mask = (DWORD_PTR)1 << (atoi(env) & 31);
+        }
+        else {
+            for (int i = 31; i >= 0 && !mask; i--) /* the highest core the process may use */
+                if (proc & ((DWORD_PTR)1 << i))
+                    mask = (DWORD_PTR)1 << i;
+            if (mask == proc) /* a single-core machine: nothing to separate */
+                mask = 0;
+        }
+        if (mask)
+            log_printf("emu: Xbox threads on host core mask %08lX (process mask %08lX)\n", (unsigned long)mask,
+                       (unsigned long)proc);
+    }
+    return mask;
+}
+
 EmuThread *emu_thread_attach(unsigned tls_size)
 {
+    if (xbox_cpu_mask())
+        SetThreadAffinityMask(GetCurrentThread(), xbox_cpu_mask());
     emu_arm_watchpoint();
     EmuThread *t = (EmuThread *)calloc(1, sizeof *t);
     unsigned char *prcb;

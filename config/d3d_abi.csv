@@ -3,7 +3,7 @@ address,name,call_sites,regs_read_before_write,ret_bytes,max_esp_disp
 0x0018d680,D3D8::D3DDevice_GetGammaRamp,3,,4,0xc
 0x0018d6b0,D3D8::D3DDevice_CreateTexture,3,,28,0x1c
 0x0018d6e0,D3D8::D3DDevice_CreateVolumeTexture,1,,32,0x20
-0x0018d710,D3D8::D3DDevice_CreateImageSurface,1,,,0x0
+0x0018d710,D3D8::D3DDevice_CreateImageSurface,1,,16,0x18
 0x0018d720,D3D8::D3DDevice_SetTransform,5,,8,0x8
 0x0018d830,D3D8::D3DDevice_GetTransform,1,,8,0x10
 0x0018d860,D3D8::D3DDevice_SetMaterial,1,,4,0x8
@@ -27,10 +27,10 @@ address,name,call_sites,regs_read_before_write,ret_bytes,max_esp_disp
 0x0018ec20,D3D8::D3DDevice_SetTile,3,,8,0x28
 0x0018ef00,D3D8::D3D_SetPushBufferSize,1,,8,0x8
 0x0018ef20,D3D8::Direct3D_CreateDevice,1,,24,0x1c
-0x0018f090,D3D8::Get2DSurfaceDesc,2,,,0x0
+0x0018f090,D3D8::Get2DSurfaceDesc,2,,12,0x28
 0x0018f0a0,D3D8::D3DTexture_GetSurfaceLevel,1,,12,0x28
 0x0018f0f0,D3D8::D3DTexture_LockRect,2,,20,0x14
-0x0018f120,D3D8::D3DVolumeTexture_LockBox,1,,,0x0
+0x0018f120,D3D8::D3DVolumeTexture_LockBox,1,,20,0x3c
 0x0018f1f0,D3D8::D3DSurface_GetDesc,7,,8,0x8
 0x0018f210,D3D8::D3DSurface_LockRect,1,,16,0x10
 0x0018f360,D3D8::D3DDevice_SetRenderState_MultiSampleMode,1,,4,0x4

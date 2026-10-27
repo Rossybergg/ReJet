@@ -94,3 +94,25 @@
 ### Next
 1. Port ReWhacked's DSOUND software mixer (`audio/dsound.c`, XAudio2) for XDK 4134: argument bytes for the 53 DSOUND functions the engine and ADX call (the same approach as `d3d_abi.py`), then replace the interim "no driver" patch. Goal: the game passes sound start-up and calls Swap (the window shows cleared frames).
 2. Then bring over the D3D pieces in order: render state (`SetRenderState_Simple` NV2A method mapping), viewport and transforms, textures (`tex.c`), vertex programs (`vsh.c`), register combiners (`psh.c`), draws, including 4134's immediate-mode `Begin`/`SetVertexData*`/`End` and `SetTile`.
+
+## 2026-10-27 — Phase 3: DirectSound mixer; the game runs to the title screen with music
+
+- **`tools/loader/xdk_abi.py`** replaces `d3d_abi.py`: any XBE section (`python tools/loader/xdk_abi.py DSOUND`), read from the XBE header, following `jmp` stubs to their body (that also filled the 3 blank rows of `config/d3d_abi.csv`). `config/dsound_abi.csv`: the 53 DSOUND functions the engine and ADX call, all stdcall.
+- **XDK 4134 DirectSound differences:** speaker routing is a mix-bin **mask** (DSBUFFERDESC field 4, `SetMixBins(DWORD)`), not 4831's DSMIXBINS pointer; buffers have `SetLoopRegion`; no streams or file media objects are used. ADX's buffer description (0x141E50): size 0x18, flags 0x400A0, 16-bit PCM 44.1 kHz stereo, mask 0. 0x19EF7C/0x19EF81 only return 0 (left as original); 0x19EFE3 takes DirectSound's internal lock (patched to a no-op).
+- **`loader/core/audio/dsound.c`** (from ReWhacked's mixer): formats, Xbox ADPCM decoder, voices, buffers (create, lock/unlock, play/stop, position, frequency, volume, headroom, loop region, mask), the 48 kHz mixer with ReWhacked's limiter, XAudio2 output, `REJET_AUDIODUMP`/`REJET_NOAUDIO`/`REJET_VOLUME`. 3D positioning, listener, effects (`GetEffectData` returns zeros, `SetEffectData`), envelopes, filters and LFOs are typed no-ops. `[Audio] Volume`, `MuteInBackground` in `rejet.ini`.
+- **Kernel/XAPI:** `NtUserIoApcDispatcher` (ordinal 232) implemented: XAPI passes it as the APC routine of overlapped reads (`ReadFileEx`), so Windows calls it; it calls the caller's completion routine with the error, byte count and OVERLAPPED. `GetThreadPriority` and `SetThreadPriorityBoost` go straight to the host (like ReWhacked's `SetThreadPriority`; the XAPI versions need `ObReferenceObjectByHandle`).
+- **CRI ADX assumes one CPU (found with a new thread dump, below).** Its lock (0x13BB50) raises the caller to priority 15 and resumes a priority-2 spinner thread (0x13BC30) so that nothing at priority 1 or below runs; unlock (0x13BB90) suspends it again. Two consequences on a PC:
+  1. **Every Xbox thread now runs on one host core** (`emu_thread.c`: the highest core of the process; `REJET_XBOXCPU=<n>` or `=all`), so Windows' priority scheduling stands in for the Xbox's. Host threads (window, D3D, mixer, XAudio2) use the other cores.
+  2. **Threads are never created suspended on the host** (`kernel/ps.c`). ADX's spinner was created suspended, resumed, and suspended again while Windows was still starting it, so it sat suspended *holding the loader lock*: XAudio2's mastering voice took ~10 s to appear and `ExitProcess` hung until ADX resumed the spinner. Now the thread starts, reports from our code, and is suspended there (suspend count 1) if the Xbox asked for a suspended thread.
+- The vblank wait (`d3d.c`) now sleeps on a per-thread high-resolution waitable timer instead of spinning with `Sleep(0)` (2.6 instead of 58 CPU-seconds in 20 s).
+- **Diagnostics:** `loader.c` writes a thread dump (loader-lock owner, each thread's priority, instruction pointer as module+offset, XBE backtrace) on timeout and after `REJET_HANGDUMP=<seconds>`.
+- **Run result (no picture yet: draws are still stubs):**
+  - start-up completes; the game presents at a steady 60 Hz (frame N at vblank N) and exits cleanly;
+  - it loads fonts, the sound DSP image, system sounds, the save area on `U:`, the title logo and stage 10; the Z: copy-on-read cache works (writes `name~`, renames);
+  - with scripted presses (`REJET_INPUT='12:start,15:start,17:a,19:a,21:start,24:a'`) it loads Beat, Gum and Yoyo and opens `Z_ADX\BGM\title.adx`; ADX plays a looping 16-bit 44.1 kHz stereo buffer, and **the title music is audible**: the recorded mix (`REJET_AUDIODUMP=1`) is silent until 32 s, then RMS 1600 → 4200 as the track fades in, peak 0.6.
+
+### Next
+1. Render state: `SetRenderState_Simple` (NV2A methods, ReWhacked's mapping) and the `SetRenderState_*`/`SetTextureState_*` functions; viewport and transforms.
+2. Textures (`tex.c`: swizzled, DXT and linear formats; the game uses DXT1/DXT2-3 (0x0C/0x0E), X8R8G8B8 and R5G6B5) and `SetTexture`.
+3. Vertex programs (`vsh.c`; the game's programs have the same NV2A `0x....2078` header as Whacked!'s), register combiners (`psh.c`), streams, indices, and the draws, including 4134's immediate mode (`Begin`/`SetVertexData*`/`End`) and `SetTile`/`GetTile`.
+4. Engine sound effects: the engine creates its ADPCM buffers with 0 bytes and fills them later (no plays seen yet); check once menus can be navigated with a picture.
