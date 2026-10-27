@@ -149,3 +149,28 @@
 1. Character shadows and outlines: find how the engine draws them (stencil, render target, or a texture pass) and what is missing.
 2. Explore further by script (leave the Garage into Shibuya-cho) and fix what shows up.
 3. Phase 4: a launcher and the enhancements (widescreen via renderer slot 31 and the camera angle at +0x74, modern camera, MSAA/anisotropy from ReWhacked).
+
+## 2026-10-27 — Shadows and outlines: investigation (in progress, uncommitted)
+
+- Added `REJET_DRAWLOG=<frame>` (per-draw shader, texture, blend, alpha test, depth, stencil, cull), a log of the first frame in which each vertex program counts stencil, and FrontFace recording (FrontFace is never called in play).
+- **JSRF shadows are stencil shadow volumes:** volumes drawn twice (back faces INCRSAT, front faces DECRSAT, depth GREATEREQUAL, no colour), then a full-screen black quad at alpha 0.5 (immediate mode, FVF 0x1C4, stencil LESSEQUAL 1). Environment volumes use fixed-function FVF 0x42; vertex program 31 draws volumes too (seen only at frame ~2316, not in the Garage).
+- Fixes so far: pre-transformed (XYZRHW) z is divided by the 24-bit depth scale (the quad was behind the scene); fixed-function stages with no texture read white (D3D9 gave alpha 0 and the quad vanished). With these, the quad covers the screen and the stencil marks the environment's shadow regions; volume geometry is in the right place (checked in wireframe).
+- Host vsync is now off by default: with it on, Present waited two monitor refreshes and halved the frame rate in unattended runs.
+- **Still open:** no visible shadow under the player in the Garage (no character volume drawn there: find how the character shadow is drawn); outlines (vertex program 29 inverted hull, untextured) not yet checked after the white-texture fix. `REJET_SHADOWDEBUG` (1/2/3) in d3d.c is a temporary debugging block to remove when done.
+
+### 2026-10-27 — after the user's first play test (10 minutes, performs well)
+
+- **Reported:** speech bubbles hidden behind the cutscene bars; boosting turns the screen grey and red; white instead of black cel outlines on some faces.
+- **Empty texture stages, corrected:** a fixed-function stage with no texture whose operation reads the texture is now switched off (the colour passes through), instead of binding a white texture. White made the untextured outline hulls white; opaque black blacked out the cutscene sky strip (a 257-vertex untextured strip with vertex colours); D3D9's default made the shadow quad and sky vanish. "Switched off" fits all of them.
+- **Pre-transformed z is 0..1 after all:** the earlier "depth-buffer units" scaling squeezed every 2D element to ~0 and hid the speech bubbles behind the letterbox bars; removed. (The shadow quad at z = 0.5 passes LEQUAL in front of nearly everything; it was never hidden by depth.)
+- **CopyRects implemented** (GPU StretchRect from the back buffer or a render target into a render-target texture): the play test created the 512x512 and 128x128 targets, used by the boost effect; the copy was a stub. Not yet verified (the boost can't be reached by script yet).
+- Verified by script: cutscene bubbles readable over the bars, Garage gameplay at 60 fps. Waiting on the user's retest of the boost and the outlines.
+
+### 2026-10-27 — second play test: open issues for next session
+
+- **Fixed and confirmed by the user:** speech bubbles over the cutscene bars.
+- **Still broken: boost** (10 cans + B): the screen goes grey and red until the boost ends. The play log shows `CopyRects` is **never called**; the game renders into its two render textures itself (512x512 and 128x128, format 0x11 LIN_R5G6B5, at data 0x0D830000 / 0x0D9B0000; host 1024x1024 / 256x256) and draws with them. Suspects, in order: texcoord scaling when sampling a linear render target (we set 1/size; check the vertex program's texcoords and VSH_C_TEXSCALE), the per-target viewport/scissor/screen constants during the off-screen pass, `SetTile`/`GetTile` (still stubs; Xbox tiling of render-target memory), and R5G6B5 having no alpha. Next: `REJET_DRAWLOG` on a boost frame (needs a save near cans) and `REJET_SHOTS`.
+- **New: map screen is solid white** (Start in the main area). Not investigated yet; check its draws with `REJET_DRAWLOG` (possibly a render target, a texture format, or the empty-stage rule).
+- **Outlines:** the user didn't report white face outlines this time (the empty-stage rule fixed them, to confirm).
+- **Saves:** the user will play manually to make a save past the training, so tests can start from it. Saves live in `%LOCALAPPDATA%\rejet\hdd\Partition1\UDATA\49470018\` (only TitleMeta/TitleImage/SaveImage there so far). Keep that folder; don't point test runs at a fresh `LOCALAPPDATA`.
+- Play-session logs kept: `build\loader\loader_user_session.log` and `loader_user_session2.log` (git-ignored).

@@ -7,7 +7,7 @@
 #include "settings.h"
 
 Settings g_settings = {
-    1280, 960, 100, 1,    /* display */
+    1280, 960, 100, 0,    /* display (host vsync off: the emulated vblank paces the game) */
     100, 0,               /* audio */
     GAME_LANG_ENGLISH, 1, /* console */
 };

@@ -11,7 +11,8 @@ typedef struct Settings {
     /* [Display] */
     int width, height; /* render resolution (default 1280x960; the Xbox renders 640x480) */
     int window_scale;  /* window size in percent of the render size (default 100) */
-    int vsync;         /* 1 = wait for the monitor's refresh when presenting */
+    int vsync;         /* 1 = also wait for the monitor's refresh when presenting (default 0: the emulated
+                          vblank already paces the game at 60 Hz, and the extra wait could halve the frame rate) */
     /* [Audio] */
     int volume;             /* master volume in percent (default 100) */
     int mute_in_background; /* silent while another program has the focus */

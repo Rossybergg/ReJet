@@ -1097,8 +1097,12 @@ static DWORD gl_stencilop(DWORD v)
     }
 }
 
+static DWORD g_rs[256]; /* what rs() last set, for the draw log */
+
 static void rs(D3DRENDERSTATETYPE s, DWORD v)
 {
+    if ((unsigned)s < 256)
+        g_rs[s] = v;
     if (g_dev)
         IDirect3DDevice9Ex_SetRenderState(g_dev, s, v);
 }
@@ -1151,9 +1155,22 @@ static void FASTCALL hle_D3DDevice_SetRenderState_Simple(DWORD Method, DWORD Val
 }
 
 /* Culling: Xbox D3D's own D3DCULL values (NONE 0, CW 0x900, CCW 0x901). */
+static DWORD g_x_cull, g_x_front = 0x900; /* Xbox CullMode and FrontFace (default D3DFRONT_CW) */
+
 static void XBAPI hle_D3DDevice_SetRenderState_CullMode(DWORD v)
 {
+    g_x_cull = v;
     rs(D3DRS_CULLMODE, v == 0x900 ? D3DCULL_CW : v == 0x901 ? D3DCULL_CCW : D3DCULL_NONE);
+}
+
+/* FrontFace: only recorded for now (see the draw log); D3D9 has no separate winding state. */
+static void XBAPI hle_D3DDevice_SetRenderState_FrontFace(DWORD v)
+{
+    static DWORD last = 0xFFFFFFFF;
+    if (v != last)
+        log_printf("d3d: FrontFace %lX (frame %lu, from %08X)\n", v, g_frame, (unsigned)(UINT_PTR)_ReturnAddress());
+    last = v;
+    g_x_front = v;
 }
 
 static void XBAPI hle_D3DDevice_SetRenderState_ZEnable(DWORD v)
@@ -1298,6 +1315,13 @@ static D3DTRANSFORMSTATETYPE host_transform(DWORD s)
 static HRESULT XBAPI hle_D3DDevice_SetTransform(DWORD State, const D3DMATRIX *pMatrix)
 {
     if (State < 10 && pMatrix) {
+        static LONG logged[10];
+        if (InterlockedIncrement(&logged[State]) <= 3)
+            log_printf("d3d: SetTransform %lu (frame %lu, from %08X): %.3f %.3f %.3f %.3f / %.3f %.3f %.3f %.3f / "
+                       "%.3f %.3f %.3f %.3f / %.3f %.3f %.3f %.3f\n", State, g_frame,
+                       (unsigned)(UINT_PTR)_ReturnAddress(), pMatrix->_11, pMatrix->_12, pMatrix->_13, pMatrix->_14,
+                       pMatrix->_21, pMatrix->_22, pMatrix->_23, pMatrix->_24, pMatrix->_31, pMatrix->_32,
+                       pMatrix->_33, pMatrix->_34, pMatrix->_41, pMatrix->_42, pMatrix->_43, pMatrix->_44);
         g_xform[State] = *pMatrix;
         if (g_dev)
             IDirect3DDevice9Ex_SetTransform(g_dev, host_transform(State), pMatrix);
@@ -1475,6 +1499,73 @@ static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, X
     return S_OK;
 }
 
+/* CopyRects(src, rects, count, dst, points): surface-to-surface copies on the GPU. JSRF's boost
+ * effect copies the picture into its 512x512 / 128x128 textures this way; without the copy
+ * they kept old contents and the screen went grey and red. Sources: the back buffer or a
+ * render-target texture; the destination becomes (or is) a render-target texture, which later
+ * draws sample. Rectangles are in game pixels of each surface and scaled to host pixels. */
+static HRESULT XBAPI hle_D3DDevice_CopyRects(XD3DSurface *pSrc, const RECT *pSrcRects, UINT cRects, XD3DSurface *pDst,
+                                             const POINT *pDstPoints)
+{
+    IDirect3DSurface9 *src;
+    const RenderTarget *s = NULL, *d;
+    float ssx, ssy;
+    UINT sw, sh;
+    {
+        SURVEY(12)
+        log_printf("survey: CopyRects %p%s -> %p, %u rects (first %ld,%ld-%ld,%ld) (from %08X)\n", (void *)pSrc,
+                   pSrc == &g_backbuffer ? " (back buffer)" : "", (void *)pDst, cRects,
+                   pSrcRects ? pSrcRects->left : 0, pSrcRects ? pSrcRects->top : 0, pSrcRects ? pSrcRects->right : 0,
+                   pSrcRects ? pSrcRects->bottom : 0, (unsigned)(UINT_PTR)_ReturnAddress());
+    }
+    if (!g_dev || !pSrc || !pDst)
+        return S_OK;
+    if (pSrc == &g_backbuffer) {
+        src = g_host_bb;
+        ssx = g_sx;
+        ssy = g_sy;
+        sw = g_xw;
+        sh = g_xh;
+    }
+    else if ((s = rt_find(pSrc->Container.Resource.Data)) != NULL) {
+        src = s->surf;
+        ssx = (float)s->hw / (float)s->w;
+        ssy = (float)s->hh / (float)s->h;
+        sw = s->w;
+        sh = s->h;
+    }
+    else {
+        TODO_ONCE("CopyRects from a texture the GPU has not drawn");
+        return S_OK;
+    }
+    if (pDst == &g_backbuffer || !(d = rt_get(pDst))) {
+        TODO_ONCE("CopyRects to the back buffer");
+        return S_OK;
+    }
+    if (g_in_scene) { /* copies go between scenes */
+        IDirect3DDevice9Ex_EndScene(g_dev);
+        g_in_scene = 0;
+    }
+    {
+        float dsx = (float)d->hw / (float)d->w, dsy = (float)d->hh / (float)d->h;
+        UINT n = (cRects && pSrcRects) ? cRects : 1;
+        for (UINT i = 0; i < n; i++) {
+            RECT sr = pSrcRects && cRects ? pSrcRects[i] : (RECT){0, 0, (LONG)sw, (LONG)sh};
+            POINT p = pDstPoints ? pDstPoints[i] : (POINT){sr.left, sr.top};
+            RECT hs = {(LONG)(sr.left * ssx), (LONG)(sr.top * ssy), (LONG)(sr.right * ssx), (LONG)(sr.bottom * ssy)};
+            RECT hd = {(LONG)(p.x * dsx), (LONG)(p.y * dsy), (LONG)((p.x + sr.right - sr.left) * dsx),
+                       (LONG)((p.y + sr.bottom - sr.top) * dsy)};
+            if (hd.right > (LONG)d->hw)
+                hd.right = (LONG)d->hw;
+            if (hd.bottom > (LONG)d->hh)
+                hd.bottom = (LONG)d->hh;
+            if (hs.right > hs.left && hs.bottom > hs.top && hd.right > hd.left && hd.bottom > hd.top)
+                IDirect3DDevice9Ex_StretchRect(g_dev, src, &hs, d->surf, &hd, D3DTEXF_LINEAR);
+        }
+    }
+    return S_OK;
+}
+
 /* ------------------------------------------------------------------ textures and streams */
 
 static HRESULT XBAPI hle_D3DDevice_SetTexture(DWORD Stage, const XD3DPixelContainer *pTexture)
@@ -1517,6 +1608,37 @@ static HRESULT XBAPI hle_D3DDevice_SetStreamSource(UINT Stream, XD3DResource *pS
 }
 
 /* ------------------------------------------------------------------ drawing */
+
+/* Debugging: REJET_DRAWLOG=<frame> lists that frame's draws with the states that decide how
+ * they look (shader, texture, blend, alpha test, depth, stencil, cull). */
+static DWORD g_dl_prim, g_dl_count;
+
+static void draw_log(void)
+{
+    static long at = -2;
+    const XD3DPixelContainer *t = g_textures[0];
+    if (at == -2) {
+        char env[16] = "";
+        at = GetEnvironmentVariableA("REJET_DRAWLOG", env, sizeof env) ? atol(env) : -1;
+    }
+    if (at < 0 || g_frame != (ULONG)at)
+        return;
+    log_printf("drawlog %4lu: prim %lu x%-5lu %s %-4lu ps %-3ld t0 %02X %4ux%-4u%s blend %lu %lu/%lu at %lu/%lu z %lu/%lu/%lu "
+               "st %lu/%lu/%lu/%lu cull %lX front %lX cw %lX%s\n",
+               g_draws, g_dl_prim, g_dl_count, (g_cur_vs & 1) ? "vs " : "fvf", (g_cur_vs & 1) ? g_cur_vs >> 1 : g_cur_vs,
+               (g_cur_ps & 1) ? (long)(g_cur_ps >> 1) : -1L, t ? XFMT_FORMAT(t->Format) : 0,
+               t ? (t->Size ? XSIZE_WIDTH(t->Size) : 1u << XFMT_USIZE(t->Format)) : 0,
+               t ? (t->Size ? XSIZE_HEIGHT(t->Size) : 1u << XFMT_VSIZE(t->Format)) : 0,
+               t && rt_find(t->Resource.Data) ? " (rt)" : "", g_rs[D3DRS_ALPHABLENDENABLE], g_rs[D3DRS_SRCBLEND],
+               g_rs[D3DRS_DESTBLEND], g_rs[D3DRS_ALPHATESTENABLE], g_rs[D3DRS_ALPHAREF], g_rs[D3DRS_ZENABLE],
+               g_rs[D3DRS_ZWRITEENABLE], g_rs[D3DRS_ZFUNC], g_rs[D3DRS_STENCILENABLE], g_rs[D3DRS_STENCILFUNC],
+               g_rs[D3DRS_STENCILREF], g_rs[D3DRS_STENCILPASS], g_x_cull, g_x_front, g_rs[D3DRS_COLORWRITEENABLE],
+               g_cur_rt ? " -> rt" : "");
+    if (g_rs[D3DRS_STENCILENABLE])
+        log_printf("drawlog       stencil mask %08lX write %08lX fail %lu zfail %lu pass %lu\n", g_rs[D3DRS_STENCILMASK],
+                   g_rs[D3DRS_STENCILWRITEMASK], g_rs[D3DRS_STENCILFAIL], g_rs[D3DRS_STENCILZFAIL],
+                   g_rs[D3DRS_STENCILPASS]);
+}
 
 /* Bind the current vertex program (or FVF), constants, textures and pixel shader (ReWhacked).
  * Returns 0 to skip the draw. */
@@ -1611,8 +1733,37 @@ static int prepare_draw(void)
             }
         }
         IDirect3DDevice9Ex_SetPixelShader(g_dev, ps);
+        /* A fixed-function stage with no Xbox texture whose operation reads the texture is switched
+         * off, so the colour passes through (the vertex colour at stage 0) and later stages are off
+         * too. That is the one rule that fits every JSRF case: the shadow quad (MODULATE texture x
+         * diffuse, black at alpha 0.5) darkens, the cutscene sky strip keeps its vertex colours,
+         * and untextured cel-outline hulls stay their own colour. Reading the empty stage as
+         * D3D9's default made the quad and sky vanish, as white made outlines white and covered
+         * the speech bubbles, and as opaque black blacked out the cutscene backgrounds. */
+        if (!ps) {
+            for (DWORD s2 = 0; s2 < 4; s2++) {
+                const DWORD *t = XTEXTURE_STATE[s2];
+                int reads_texture = (t[13] & 0xF) == D3DTA_TEXTURE || (t[14] & 0xF) == D3DTA_TEXTURE ||
+                                    (t[15] & 0xF) == D3DTA_TEXTURE || (t[17] & 0xF) == D3DTA_TEXTURE ||
+                                    (t[18] & 0xF) == D3DTA_TEXTURE || (t[19] & 0xF) == D3DTA_TEXTURE;
+                if (!g_textures[s2] && reads_texture) {
+                    IDirect3DDevice9Ex_SetTextureStageState(g_dev, s2, D3DTSS_COLOROP, D3DTOP_DISABLE);
+                    IDirect3DDevice9Ex_SetTextureStageState(g_dev, s2, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+                    break; /* D3D9 ignores every stage after a disabled one */
+                }
+            }
+        }
     }
     IDirect3DDevice9Ex_SetVertexShaderConstantF(g_dev, 0, g_vconst[0], VSH_CONSTANTS);
+    if ((g_cur_vs & 1) && g_rs[D3DRS_STENCILENABLE] && g_rs[D3DRS_STENCILPASS] >= D3DSTENCILOP_INCRSAT) {
+        static BYTE seen[MAX_SHADERS];
+        unsigned i = g_cur_vs >> 1;
+        if (i < MAX_SHADERS && !seen[i]) { /* stencil-counting programs (shadow volumes) */
+            seen[i] = 1;
+            log_printf("d3d: vertex program %u first counts stencil at frame %lu\n", i, g_frame);
+        }
+    }
+    draw_log();
     g_draws++;
     return 1;
 }
@@ -1638,8 +1789,10 @@ static int convert_prim(DWORD xprim, UINT count, D3DPRIMITIVETYPE *pt, UINT *pri
 static WORD g_quad_idx[65536 / 4 * 6];
 
 /* Pre-transformed (XYZRHW) vertices are in Xbox screen pixels; at another render resolution
- * they are copied with x and y scaled. Vertices first..last of `verts` are converted; the
- * returned pointer is used with the same indices. */
+ * they are copied with x and y scaled. Their z is already 0..1, as on the PC (scaling it as
+ * depth-buffer units squeezed every 2D element to ~0 and hid the speech bubbles behind the
+ * letterbox bars). Vertices first..last of `verts` are converted; the returned pointer is used
+ * with the same indices. */
 static const BYTE *scale_rhw(const BYTE *verts, UINT first, UINT last, UINT stride)
 {
     static BYTE *buf;
@@ -1670,8 +1823,37 @@ static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, con
     UINT prims, lo = 0, hi = 0;
     int quads;
     LONGLONG t0 = perf_now();
+    g_dl_prim = xprim;
+    g_dl_count = count;
     if (!verts || !stride || !convert_prim(xprim, count, &pt, &prims, &quads) || !prepare_draw())
         return;
+    { /* TEMPORARY shadow debugging: REJET_SHADOWDEBUG=1 draws the stencil-tested darkening quad red
+       * without the stencil test; =2 keeps the stencil test but makes it red */
+        static int dbg = -1;
+        if (dbg < 0) {
+            char env[4] = "";
+            dbg = GetEnvironmentVariableA("REJET_SHADOWDEBUG", env, sizeof env) ? env[0] - '0' : 0;
+        }
+        if (dbg == 3 && g_cur_vs == 0x42 && g_rs[D3DRS_STENCILENABLE]) { /* =3: show the volumes */
+            IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_STENCILENABLE, FALSE);
+            IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_ZENABLE, FALSE);
+            IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_ALPHABLENDENABLE, FALSE);
+            IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_FILLMODE, D3DFILL_WIREFRAME);
+            IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_LIGHTING, FALSE);
+            IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_TEXTUREFACTOR, 0xFFFF0000);
+            IDirect3DDevice9Ex_SetTextureStageState(g_dev, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+            IDirect3DDevice9Ex_SetTextureStageState(g_dev, 0, D3DTSS_COLORARG1, D3DTA_TFACTOR);
+        }
+        if (dbg && dbg < 3 && !(g_cur_vs & 1) && g_cur_vs == 0x1C4 && !g_textures[0] && g_rs[D3DRS_STENCILENABLE]) {
+            if (dbg == 1)
+                IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_STENCILENABLE, FALSE);
+            IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_ALPHABLENDENABLE, FALSE);
+            IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_TEXTUREFACTOR, 0xFFFF0000);
+            IDirect3DDevice9Ex_SetTextureStageState(g_dev, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+            IDirect3DDevice9Ex_SetTextureStageState(g_dev, 0, D3DTSS_COLORARG1, D3DTA_TFACTOR);
+            IDirect3DDevice9Ex_SetPixelShader(g_dev, NULL);
+        }
+    }
     if (quads) {
         UINT q = count / 4;
         if (q > 65536 / 4)
@@ -1857,7 +2039,6 @@ STUB(GetGammaRamp, 0, D a)
 STUB(GetTile, 0, D a, D b)
 STUB(SetTile, 0, D a, D b)
 STUB(DisplayQuery_18E120, 0, D a)
-STUB(CopyRects, 0, D a, D b, D c, D d, D e)
 STUB(GetTexture2, 0, D a, D b)
 STUB(SetRenderState_1arg, 0, D a)
 #undef D
@@ -1916,7 +2097,7 @@ const HlePatch g_d3d_patches[] = {
     P(D3DDevice_LightEnable, hle_D3DDevice_LightEnable),
     P(D3DDevice_SetViewport, hle_D3DDevice_SetViewport),
     P(D3DDevice_SetRenderTarget, hle_D3DDevice_SetRenderTarget),
-    P(D3DDevice_CopyRects, stub_CopyRects),
+    P(D3DDevice_CopyRects, hle_D3DDevice_CopyRects),
     P(D3DDevice_GetTile, stub_GetTile),
     P(D3DDevice_SetTile, stub_SetTile),
     /* textures and streams */
@@ -1936,7 +2117,7 @@ const HlePatch g_d3d_patches[] = {
     /* render and texture state */
     P(D3DDevice_SetRenderState_Simple, hle_D3DDevice_SetRenderState_Simple),
     P(D3DDevice_SetRenderState_CullMode, hle_D3DDevice_SetRenderState_CullMode),
-    P(D3DDevice_SetRenderState_FrontFace, stub_SetRenderState_1arg),
+    P(D3DDevice_SetRenderState_FrontFace, hle_D3DDevice_SetRenderState_FrontFace),
     P(D3DDevice_SetRenderState_ZEnable, hle_D3DDevice_SetRenderState_ZEnable),
     P(D3DDevice_SetRenderState_FillMode, hle_D3DDevice_SetRenderState_FillMode),
     P(D3DDevice_SetRenderState_StencilEnable, hle_D3DDevice_SetRenderState_StencilEnable),
