@@ -32,11 +32,15 @@ add_library(rejet SHARED
   core/kernel/sync.c
   core/kernel/xc.c
   core/d3d/d3d.c
+  core/d3d/psh.c
+  core/d3d/shadercache.c
+  core/d3d/tex.c
+  core/d3d/vsh.c
   core/input/xpp.c
   core/audio/dsound.c)
 target_include_directories(rejet PRIVATE core ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 target_compile_options(rejet PRIVATE /W4 /arch:IA32)
-target_link_libraries(rejet PRIVATE shell32 d3d9 xinput xaudio2 ole32)
+target_link_libraries(rejet PRIVATE shell32 d3d9 d3dcompiler xinput xaudio2 ole32)
 target_link_options(rejet PRIVATE /LARGEADDRESSAWARE)
 
 # ReJetLoader.exe: tiny stub that owns 0x10000.. (see ReWhacked's docs/LOADER.md).

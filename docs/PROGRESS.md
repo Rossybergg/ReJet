@@ -116,3 +116,20 @@
 2. Textures (`tex.c`: swizzled, DXT and linear formats; the game uses DXT1/DXT2-3 (0x0C/0x0E), X8R8G8B8 and R5G6B5) and `SetTexture`.
 3. Vertex programs (`vsh.c`; the game's programs have the same NV2A `0x....2078` header as Whacked!'s), register combiners (`psh.c`), streams, indices, and the draws, including 4134's immediate mode (`Begin`/`SetVertexData*`/`End`) and `SetTile`/`GetTile`.
 4. Engine sound effects: the engine creates its ADPCM buffers with 0 bytes and fills them later (no plays seen yet); check once menus can be navigated with a picture.
+
+## 2026-10-27 — Phase 3: rendering; the title screen and attract mode draw in 3D
+
+- **D3D state in XDK 4134 (same model as Whacked!):** the engine writes D3D's state arrays inline and calls D3D only for the rest. Texture state `TextureState[4][32]` at **0x19E9A0** (4831 indices; TexCoordIndex at 0x19EA10 and ColorKeyColor at 0x19EA18 confirm it), dirty flags 0x19E998, render-state array 0x19EBA0, `D3D__IndexData` **0x19E994** (the engine computes DrawIndexedVertices' index pointer from it). `SetRenderState_Simple` passes the whole NV2A method word (count bits included, 0x0004035C), so only the low bits are mapped.
+- `SetVertexShaderConstant(Register, pData, Count)` takes D3D register numbers and registers (it adds 0x60 itself: c0 is NV2A 96); 4831 had NV2A numbers and dword counts.
+- **Ported from ReWhacked:** `vsh.c` (NV2A vertex programs → HLSL), `psh.c` (register combiners → HLSL), `tex.c` (swizzled, DXT, linear, volume, cube textures), `shadercache.c` (`%LOCALAPPDATA%\rejet\shadercache`), and in `d3d.c`: vertex/pixel shader creation and binding, constants, `prepare_draw`, NV2A render-state mapping, the 1-argument render states, texture-stage state from the array, viewport with scissor (split screen), transforms (kept for GetTransform, passed to the host for fixed-function draws), lights and materials, SetTexture, streams, indices, and the draws (`DrawVertices`, `DrawIndexedVertices`, `DrawVerticesUP`, `DrawIndexedVerticesUP`, quads → triangles, XYZRHW scaled to the render resolution). Screenshots: F12 → `Screenshots\`, `REJET_SHOTS=<frames>`; `REJET_DUMPVS=1` dumps programs and declarations. HD texture packs are stubbed (`hdtex.h`).
+- **Vertex declarations:** JSRF uses `D3DVSDT_PBYTE4` (0x44) for vertex colours, which ReWhacked's parser didn't know (every program's declaration failed). `vsh_declaration` now maps the Xbox types with a D3D9 equivalent: FLOAT1-4, D3DCOLOR, PBYTE4 (UBYTE4N), SHORT2/4, NORMSHORT2/4; others are logged.
+- **Result (1280x960):**
+  - the SEGA logo and the anti-graffiti notice draw correctly (30 fps on those screens);
+  - the **title screen draws in full 3D** (the city with characters, the JSRF logo and copyright) and the **attract mode** shows a cel-shaded skater with outlines, motion lines, "PLEASE PRESS START TO BEGIN" and the logo, at a full **60 fps** (600 frames in 605 vblanks, about 270,000 draws per 10 s);
+  - 254 vertex programs created; no render-state method unmapped; no draws skipped; about 10% of draws untextured (to check).
+- Still stubs: immediate mode (`Begin`/`SetVertexData2f`/`SetVertexData4f`/`End`, used by the engine at 0x151E4E, probably fades or overlays), render-to-texture (draws into other targets are skipped; none seen yet on these screens), `SetTile`/`GetTile`, gamma, the multisample/z-bias/line-width render states, `CopyRects`.
+
+### Next
+1. Immediate mode (Begin/SetVertexData/End) so fades and overlays draw; then render-to-texture (the engine's 512x512 and 128x128 R5G6B5 targets).
+2. Play into a stage (scripted input) and fix what shows up; compare with xemu or real hardware screenshots where unsure.
+3. Then Phase 4 enhancements (launcher, widescreen via renderer slot 31, modern camera).

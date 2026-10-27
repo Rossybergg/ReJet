@@ -8,9 +8,10 @@
  * nothing else needs catching.
  *
  * Implemented: device creation, Reset, Clear, Swap, the vertical blank, resources (textures,
- * surfaces, vertex/index buffers as Xbox-layout objects in game memory) and their locks, shader
- * handles. Render state, transforms, shaders, textures and draws are stubs that log their first
- * call: they come over from ReWhacked next. Pure helpers that only read static data or call the
+ * surfaces, vertex/index buffers as Xbox-layout objects in game memory) and their locks, and,
+ * from ReWhacked, NV2A vertex programs (vsh.c), register combiners (psh.c), textures (tex.c),
+ * render and texture state, transforms, lights, viewport and draws. Not yet: render-to-texture,
+ * immediate mode (Begin/SetVertexData/End), tiling, gamma; these are typed stubs. Pure helpers that only read static data or call the
  * kernel (adapter queries, D3D_SetPushBufferSize, D3D_AllocContiguousMemory,
  * D3DResource_GetType/Register, XGRAPHC) keep running as original code. */
 #define WIN32_LEAN_AND_MEAN
@@ -25,7 +26,10 @@
 #include "hle.h"
 #include "kernel.h"
 #include "perf.h"
+#include "psh.h"
 #include "settings.h"
+#include "tex.h"
+#include "vsh.h"
 #include "xbox/xbox_d3d.h"
 #include "xboxkrnl_impl.h"
 #include "xdk_addrs.gen.h"
@@ -44,6 +48,18 @@ static ULONG g_frame;
  * g_hw x g_hh (settings). Clear rectangles are given in game pixels and scaled. */
 static UINT g_xw = 640, g_xh = 480, g_hw = 640, g_hh = 480;
 static float g_sx = 1.0f, g_sy = 1.0f;
+static RECT g_vp_rect;   /* the Xbox viewport in render pixels (split screen) */
+static int g_vp_partial; /* viewport smaller than the screen: scissor and Clear use g_vp_rect */
+
+/* Draw state (ReWhacked's model). */
+static float g_vconst[VSH_CONSTANTS][4]; /* NV2A constant file (+ our extras) */
+static const XD3DPixelContainer *g_textures[4];
+static XD3DResource *g_stream_vb;
+static UINT g_stream_stride;
+static UINT g_base_vertex;
+static int g_in_scene;
+static ULONG g_draws, g_skipped, g_untextured; /* per-600-frame counters for the log */
+static volatile LONG g_shot_request;          /* F12 */
 
 /* Log the first call of each not-yet-implemented entry point. */
 #define TODO_ONCE(name)                                                     \
@@ -64,6 +80,10 @@ static LRESULT CALLBACK wnd_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
     if (m == WM_CLOSE) {
         log_printf("d3d: window closed; exiting\n");
         ExitProcess(0);
+    }
+    if (m == WM_KEYDOWN && wp == VK_F12) {
+        InterlockedExchange(&g_shot_request, 1);
+        return 0;
     }
     return DefWindowProcW(w, m, wp, lp);
 }
@@ -123,6 +143,25 @@ static D3DFORMAT host_format(uint32_t xfmt)
 }
 
 /* ------------------------------------------------------------------ device */
+
+/* Xbox runtime behaviour: the viewport sets the reserved constants c-38 (scale) and c-37
+ * (offset) that every 3D program's screen-space epilogue uses. Depth stays in [0, 1]. */
+static void set_screen_constants(const D3DVIEWPORT9 *vp)
+{
+    float *scale = g_vconst[96 - 38], *offset = g_vconst[96 - 37];
+    scale[0] = (float)vp->Width * 0.5f;
+    scale[1] = -(float)vp->Height * 0.5f;
+    scale[2] = vp->MaxZ - vp->MinZ;
+    scale[3] = 1.0f;
+    offset[0] = (float)vp->X + (float)vp->Width * 0.5f;
+    offset[1] = (float)vp->Y + (float)vp->Height * 0.5f;
+    offset[2] = vp->MinZ;
+    offset[3] = 0.0f;
+}
+
+void d3d_note_shader_compile(void) /* shadercache.c, on a cache miss (no progress screen yet) */
+{
+}
 
 static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, HWND hFocusWindow, DWORD BehaviorFlags,
                                                XD3DPRESENT_PARAMETERS *pp, void **ppDevice)
@@ -192,6 +231,20 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
     g_depth.Container.Size = g_backbuffer.Container.Size;
     IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_CULLMODE, D3DCULL_NONE);
     IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_LIGHTING, FALSE);
+    for (DWORD s = 0; s < 4; s++) {
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+    }
+    { /* screen-space constants for a full-target viewport until SetViewport is called */
+        D3DVIEWPORT9 vp = {0, 0, w, h, 0.0f, 1.0f};
+        set_screen_constants(&vp);
+    }
+    g_vconst[VSH_C_SCREEN][0] = 2.0f / (float)w;
+    g_vconst[VSH_C_SCREEN][1] = -2.0f / (float)h;
+    g_vconst[VSH_C_SCREEN][2] = g_vconst[VSH_C_SCREEN][3] = 1.0f;
+    /* no widescreen squeeze yet: 2D programs keep their x scale */
+    g_vconst[VSH_C_2D][0] = g_vconst[VSH_C_2D][1] = g_vconst[VSH_C_2D][2] = g_vconst[VSH_C_2D][3] = 1.0f;
     log_printf("d3d: Direct3D 9Ex device ready, window %p\n", (void *)g_wnd);
     return S_OK;
 }
@@ -244,6 +297,10 @@ static HRESULT XBAPI hle_D3DDevice_Clear(DWORD Count, const D3DRECT *pRects, DWO
             r[i].y2 = (LONG)(pRects[i].y2 * g_sy);
         }
         return IDirect3DDevice9Ex_Clear(g_dev, Count, r, f, Color, Z, Stencil);
+    }
+    if (g_vp_partial) { /* the Xbox clears the viewport only (split screen: one player's area) */
+        D3DRECT r = {g_vp_rect.left, g_vp_rect.top, g_vp_rect.right, g_vp_rect.bottom};
+        return IDirect3DDevice9Ex_Clear(g_dev, 1, &r, f, Color, Z, Stencil);
     }
     return IDirect3DDevice9Ex_Clear(g_dev, 0, NULL, f, Color, Z, Stencil);
 }
@@ -365,6 +422,74 @@ static void present(void)
     IDirect3DDevice9Ex_PresentEx(g_dev, NULL, &d, NULL, NULL, 0);
 }
 
+/* Save the back buffer as a BMP (ReWhacked). */
+static void save_backbuffer(const char *name)
+{
+    IDirect3DSurface9 *bb = NULL, *sys = NULL;
+    D3DSURFACE_DESC desc;
+    D3DLOCKED_RECT lr;
+    FILE *f;
+
+    if (FAILED(IDirect3DDevice9Ex_GetBackBuffer(g_dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)))
+        return;
+    IDirect3DSurface9_GetDesc(bb, &desc);
+    if (SUCCEEDED(IDirect3DDevice9Ex_CreateOffscreenPlainSurface(g_dev, desc.Width, desc.Height, desc.Format,
+                                                                 D3DPOOL_SYSTEMMEM, &sys, NULL)) &&
+        SUCCEEDED(IDirect3DDevice9Ex_GetRenderTargetData(g_dev, bb, sys)) &&
+        SUCCEEDED(IDirect3DSurface9_LockRect(sys, &lr, NULL, D3DLOCK_READONLY))) {
+        if ((f = fopen(name, "wb")) != NULL) {
+            BITMAPFILEHEADER fh = {0};
+            BITMAPINFOHEADER ih = {0};
+            ih.biSize = sizeof ih;
+            ih.biWidth = (LONG)desc.Width;
+            ih.biHeight = -(LONG)desc.Height; /* top-down */
+            ih.biPlanes = 1;
+            ih.biBitCount = 32;
+            fh.bfType = 0x4D42;
+            fh.bfOffBits = sizeof fh + sizeof ih;
+            fh.bfSize = fh.bfOffBits + desc.Width * desc.Height * 4;
+            fwrite(&fh, sizeof fh, 1, f);
+            fwrite(&ih, sizeof ih, 1, f);
+            for (UINT y = 0; y < desc.Height; y++)
+                fwrite((BYTE *)lr.pBits + y * lr.Pitch, 4, desc.Width, f);
+            fclose(f);
+        }
+        IDirect3DSurface9_UnlockRect(sys);
+    }
+    if (sys)
+        IDirect3DSurface9_Release(sys);
+    IDirect3DSurface9_Release(bb);
+}
+
+/* F12: Screenshots\jsrf_<date>_<time>.bmp next to the loader. REJET_SHOTS=<n> (debugging):
+ * shot_NNNNN.bmp every n frames (1 = every 300). */
+static void maybe_screenshot(void)
+{
+    static int every = -1;
+    char name[MAX_PATH];
+    if (!g_dev)
+        return;
+    if (InterlockedExchange(&g_shot_request, 0)) {
+        SYSTEMTIME t;
+        GetLocalTime(&t);
+        CreateDirectoryA("Screenshots", NULL);
+        snprintf(name, sizeof name, "Screenshots\\jsrf_%04u%02u%02u_%02u%02u%02u_%03u.bmp", t.wYear, t.wMonth, t.wDay,
+                 t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+        save_backbuffer(name);
+        log_printf("d3d: screenshot %s\n", name);
+    }
+    if (every < 0) {
+        char env[8] = "";
+        every = GetEnvironmentVariableA("REJET_SHOTS", env, sizeof env) ? atoi(env) : 0;
+        if (every == 1)
+            every = 300;
+    }
+    if (every > 0 && g_frame % (ULONG)every == 0) {
+        snprintf(name, sizeof name, "shot_%05lu.bmp", g_frame);
+        save_backbuffer(name);
+    }
+}
+
 /* Swap(Flags): 0 = present at the next vblank. The engine also uses 2 (present and keep the
  * old front buffer readable, for its screenshot path 0x14DBC0) and 4 (0x14DB80). */
 static DWORD XBAPI hle_D3DDevice_Swap(DWORD Flags)
@@ -374,12 +499,21 @@ static DWORD XBAPI hle_D3DDevice_Swap(DWORD Flags)
     wait_vblank(); /* presentation interval ONE */
     perf_wait_done();
     t0 = perf_now();
+    if (g_dev && g_in_scene) {
+        IDirect3DDevice9Ex_EndScene(g_dev);
+        g_in_scene = 0;
+    }
+    maybe_screenshot();
     if (g_dev)
         present();
     perf_end(PERF_PRESENT, t0);
+    tex_new_frame();
     g_frame++;
-    if (g_frame <= 3 || g_frame % 600 == 0)
-        log_printf("d3d: frame %lu at vblank %lu (Swap flags %lX)\n", g_frame, vblank_now(), Flags);
+    if (g_frame <= 3 || g_frame % 600 == 0) {
+        log_printf("d3d: frame %lu at vblank %lu (Swap flags %lX), draws %lu (untextured %lu), skipped %lu\n", g_frame,
+                   vblank_now(), Flags, g_draws, g_untextured, g_skipped);
+        g_draws = g_skipped = g_untextured = 0;
+    }
     return g_frame;
 }
 
@@ -722,31 +856,784 @@ static HRESULT XBAPI hle_D3DDevice_GetDepthStencilSurface(XD3DSurface **ppZStenc
     return S_OK;
 }
 
-/* ------------------------------------------------------------------ shaders (handles only) */
+/* ------------------------------------------------------------------ shaders */
 
-static LONG g_next_shader = 0x100;
+#define MAX_SHADERS 4096
+static const DWORD *g_vs_decl[MAX_SHADERS], *g_vs_func[MAX_SHADERS];
+static unsigned g_vs_decl_n[MAX_SHADERS], g_vs_func_n[MAX_SHADERS]; /* dwords, for de-duplication */
+static IDirect3DVertexShader9 *g_vs_host[MAX_SHADERS];
+static IDirect3DVertexDeclaration9 *g_vs_vdecl[MAX_SHADERS];
+static BYTE g_vs_state[MAX_SHADERS]; /* 0 untried, 1 ready, 2 failed */
+static unsigned g_vs_count, g_ps_count;
 
+/* Translate and compile program i (once), when the game creates it, so play never waits on the
+ * compiler (ReWhacked); prepare_draw retries if needed. */
+static void ensure_vs(unsigned i)
+{
+    static int logged;
+    LONGLONG t0;
+    if (g_vs_state[i] != 0 || !g_dev || !g_vs_func[i])
+        return;
+    if (!logged++) { /* show one translation in full */
+        static char hlsl[64 * 1024];
+        if (vsh_to_hlsl(g_vs_func[i], g_vs_decl[i], hlsl, sizeof hlsl))
+            log_printf("vsh: program %u as HLSL:\n%s\n", i, hlsl);
+    }
+    t0 = perf_now();
+    g_vs_host[i] = vsh_compile((IDirect3DDevice9 *)g_dev, g_vs_func[i], g_vs_decl[i], i);
+    perf_end(PERF_VSC, t0);
+    g_vs_vdecl[i] = vsh_declaration((IDirect3DDevice9 *)g_dev, g_vs_decl[i], NULL);
+    g_vs_state[i] = (g_vs_host[i] && g_vs_vdecl[i]) ? 1 : 2;
+    if (g_vs_state[i] == 2)
+        log_printf("vsh: program %u failed (%s)\n", i, g_vs_host[i] ? "declaration" : "translation or compile");
+}
+
+/* Handles have bit 0 set so they can't be mistaken for FVF codes. The engine passes buffers it
+ * reuses (copied here, as the XDK does); identical programs return the existing handle. */
 static HRESULT XBAPI hle_D3DDevice_CreateVertexShader(const DWORD *pDeclaration, const DWORD *pFunction,
                                                       DWORD *pHandle, DWORD Usage)
 {
-    (void)pDeclaration;
+    unsigned decl_n = 0, func_n = pFunction ? 1 + 4 * (pFunction[0] >> 16) : 0;
+    DWORD *d, *f = NULL;
     (void)Usage;
+    if (g_vs_count >= MAX_SHADERS)
+        return E_OUTOFMEMORY;
     {
-        SURVEY(5)
-        log_printf("survey: CreateVertexShader decl %p function %p (header %08lX) (from %08X)\n",
-                   (const void *)pDeclaration, (const void *)pFunction, pFunction ? pFunction[0] : 0,
-                   (unsigned)(UINT_PTR)_ReturnAddress());
+        /* REJET_DUMPVS=1: write each program (header + microcode) and its declaration. */
+        char env[4] = "";
+        if (pFunction && GetEnvironmentVariableA("REJET_DUMPVS", env, sizeof env) && env[0] == '1') {
+            char path[64];
+            FILE *fp;
+            unsigned n = 0;
+            CreateDirectoryA("vsh", NULL);
+            snprintf(path, sizeof path, "vsh\\%03u.bin", g_vs_count);
+            if ((fp = fopen(path, "wb")) != NULL) {
+                fwrite(pFunction, 4, func_n, fp);
+                fclose(fp);
+            }
+            while (pDeclaration && pDeclaration[n] != 0xFFFFFFFF && n < 64)
+                n++;
+            snprintf(path, sizeof path, "vsh\\%03u.decl", g_vs_count);
+            if ((fp = fopen(path, "wb")) != NULL) {
+                fwrite(pDeclaration, 4, n, fp);
+                fclose(fp);
+            }
+        }
     }
-    /* Xbox vertex shader handles are odd (even values are FVF codes): keep bit 0 set. */
-    *pHandle = (DWORD)(InterlockedAdd(&g_next_shader, 2) | 1);
+    while (pDeclaration && pDeclaration[decl_n] != 0xFFFFFFFF && decl_n < 256)
+        decl_n++;
+    for (unsigned i = 0; i < g_vs_count; i++) {
+        if (g_vs_decl_n[i] == decl_n && g_vs_func_n[i] == func_n &&
+            (!decl_n || !memcmp(g_vs_decl[i], pDeclaration, decl_n * sizeof(DWORD))) &&
+            (!func_n || !memcmp(g_vs_func[i], pFunction, func_n * sizeof(DWORD)))) {
+            *pHandle = (i << 1) | 1;
+            return S_OK;
+        }
+    }
+    g_vs_decl_n[g_vs_count] = decl_n;
+    g_vs_func_n[g_vs_count] = func_n;
+    d = (DWORD *)malloc((decl_n + 1) * sizeof *d);
+    if (decl_n)
+        memcpy(d, pDeclaration, decl_n * sizeof *d);
+    d[decl_n] = 0xFFFFFFFF;
+    if (func_n) {
+        f = (DWORD *)malloc(func_n * sizeof *f);
+        memcpy(f, pFunction, func_n * sizeof *f);
+    }
+    g_vs_decl[g_vs_count] = d;
+    g_vs_func[g_vs_count] = f;
+    *pHandle = (g_vs_count << 1) | 1;
+    ensure_vs(g_vs_count++);
     return S_OK;
 }
 
-static HRESULT XBAPI hle_D3DDevice_CreatePixelShader(const void *pPSDef, DWORD *pHandle)
+static HRESULT XBAPI hle_D3DDevice_DeleteVertexShader(DWORD Handle)
 {
-    (void)pPSDef;
-    *pHandle = (DWORD)InterlockedAdd(&g_next_shader, 2);
+    (void)Handle;
     return S_OK;
+}
+
+static DWORD g_cur_vs;
+
+static HRESULT XBAPI hle_D3DDevice_SetVertexShader(DWORD Handle)
+{
+    g_cur_vs = Handle;
+    return S_OK;
+}
+
+/* Pixel shaders: an Xbox D3DPIXELSHADERDEF (register-combiner program, 60 dwords) copied at
+ * creation; handle = (index << 1) | 1. */
+#define PS_DEF_DWORDS 60
+#define MAX_PS 256
+static DWORD g_ps_def[MAX_PS][PS_DEF_DWORDS];
+/* Compiled variants per shader, keyed by what is bound to each texture stage (PSH_BOUND_*). */
+#define PS_VARIANTS 16
+typedef struct { unsigned key; BYTE state; IDirect3DPixelShader9 *host; } PsVariant; /* state 0/1 ok/2 failed */
+static PsVariant g_ps_var[MAX_PS][PS_VARIANTS];
+static DWORD g_cur_ps;
+static float g_psconst[16][4];
+
+static HRESULT XBAPI hle_D3DDevice_CreatePixelShader(const void *pDef, DWORD *pHandle)
+{
+    unsigned i = g_ps_count;
+    for (unsigned k = 0; k < g_ps_count; k++) { /* identical definition: reuse */
+        if (!memcmp(g_ps_def[k], pDef, sizeof g_ps_def[k])) {
+            *pHandle = (k << 1) | 1;
+            return S_OK;
+        }
+    }
+    if (i >= MAX_PS)
+        return E_OUTOFMEMORY;
+    memcpy(g_ps_def[i], pDef, sizeof g_ps_def[i]);
+    g_ps_count++;
+    *pHandle = (i << 1) | 1;
+    return S_OK;
+}
+
+static HRESULT XBAPI hle_D3DDevice_DeletePixelShader(DWORD Handle)
+{
+    (void)Handle;
+    return S_OK;
+}
+
+static HRESULT XBAPI hle_D3DDevice_SetPixelShader(DWORD Handle)
+{
+    g_cur_ps = Handle;
+    return S_OK;
+}
+
+static HRESULT XBAPI hle_D3DDevice_SetPixelShaderConstant(DWORD Register, const void *pData, DWORD Count)
+{
+    if (Register + Count <= 16)
+        memcpy(g_psconst[Register], pData, Count * sizeof g_psconst[0]);
+    return S_OK;
+}
+
+/* XDK 4134: SetVertexShaderConstant(Register, pData, Count) takes D3D register numbers
+ * (-96..95) and Count in registers, and adds 0x60 itself (0x1910C4): c0 is NV2A register 96. */
+static HRESULT XBAPI hle_D3DDevice_SetVertexShaderConstant(INT Register, const void *pData, DWORD Count)
+{
+    INT first = Register + 96;
+    if (first < 0 || first + (INT)Count > 192) {
+        log_printf("d3d: vertex constant range %d+%lu out of bounds\n", Register, Count);
+        return S_OK;
+    }
+    memcpy(g_vconst[first], pData, Count * sizeof g_vconst[0]);
+    return S_OK;
+}
+
+/* Mode bit 0x10 = no reserved constants; the rest selects 96/192 constants. Logged for now:
+ * the translator assumes the default (96 constants, c-38/c-37 reserved by the viewport). */
+static HRESULT XBAPI hle_D3DDevice_SetShaderConstantMode(DWORD Mode)
+{
+    static DWORD last = 0xFFFFFFFF;
+    if (Mode != last)
+        log_printf("d3d: SetShaderConstantMode %lX\n", Mode);
+    last = Mode;
+    return S_OK;
+}
+
+/* ------------------------------------------------------------------ render state */
+
+/* ---- NV2A / OpenGL enums (what Xbox D3D passes) -> D3D9 (ReWhacked) ---- */
+
+static DWORD gl_cmp(DWORD v) /* GL_NEVER 0x200 .. GL_ALWAYS 0x207 -> D3DCMP_NEVER 1 .. ALWAYS 8 */
+{
+    return (v >= 0x200 && v <= 0x207) ? v - 0x200 + 1 : D3DCMP_ALWAYS;
+}
+
+static DWORD gl_blend(DWORD v)
+{
+    switch (v) {
+    case 0x0000: return D3DBLEND_ZERO;
+    case 0x0001: return D3DBLEND_ONE;
+    case 0x0300: return D3DBLEND_SRCCOLOR;
+    case 0x0301: return D3DBLEND_INVSRCCOLOR;
+    case 0x0302: return D3DBLEND_SRCALPHA;
+    case 0x0303: return D3DBLEND_INVSRCALPHA;
+    case 0x0304: return D3DBLEND_DESTALPHA;
+    case 0x0305: return D3DBLEND_INVDESTALPHA;
+    case 0x0306: return D3DBLEND_DESTCOLOR;
+    case 0x0307: return D3DBLEND_INVDESTCOLOR;
+    case 0x0308: return D3DBLEND_SRCALPHASAT;
+    case 0x8001: case 0x8003: return D3DBLEND_BLENDFACTOR; /* constant colour / alpha */
+    case 0x8002: case 0x8004: return D3DBLEND_INVBLENDFACTOR;
+    default: return D3DBLEND_ONE;
+    }
+}
+
+static DWORD gl_blendop(DWORD v)
+{
+    switch (v) {
+    case 0x800A: return D3DBLENDOP_SUBTRACT;
+    case 0x800B: return D3DBLENDOP_REVSUBTRACT;
+    case 0x8007: return D3DBLENDOP_MIN;
+    case 0x8008: return D3DBLENDOP_MAX;
+    default: return D3DBLENDOP_ADD; /* 0x8006 */
+    }
+}
+
+static DWORD gl_stencilop(DWORD v)
+{
+    switch (v) {
+    case 0x0000: return D3DSTENCILOP_ZERO;
+    case 0x1E01: return D3DSTENCILOP_REPLACE;
+    case 0x1E02: return D3DSTENCILOP_INCRSAT;
+    case 0x1E03: return D3DSTENCILOP_DECRSAT;
+    case 0x150A: return D3DSTENCILOP_INVERT;
+    case 0x8507: return D3DSTENCILOP_INCR;
+    case 0x8508: return D3DSTENCILOP_DECR;
+    default: return D3DSTENCILOP_KEEP; /* 0x1E00 */
+    }
+}
+
+static void rs(D3DRENDERSTATETYPE s, DWORD v)
+{
+    if (g_dev)
+        IDirect3DDevice9Ex_SetRenderState(g_dev, s, v);
+}
+
+/* SetRenderState_Simple(ecx = NV2A push-buffer method, edx = value). XDK 4134 passes the whole
+ * method word, count bits included (0x0004035C = 1 dword to 0x35C), so only the low bits count. */
+static void FASTCALL hle_D3DDevice_SetRenderState_Simple(DWORD Method, DWORD Value)
+{
+    switch (Method & 0x1FFC) {
+    case 0x0300: rs(D3DRS_ALPHATESTENABLE, Value != 0); break;
+    case 0x0304: rs(D3DRS_ALPHABLENDENABLE, Value != 0); break;
+    case 0x030C: rs(D3DRS_ZENABLE, Value ? D3DZB_TRUE : D3DZB_FALSE); break;
+    case 0x0310: rs(D3DRS_DITHERENABLE, Value != 0); break;
+    case 0x0314: rs(D3DRS_LIGHTING, Value != 0); break;
+    case 0x032C: rs(D3DRS_STENCILENABLE, Value != 0); break;
+    case 0x033C: rs(D3DRS_ALPHAFUNC, gl_cmp(Value)); break;
+    case 0x0340: rs(D3DRS_ALPHAREF, Value & 0xFF); break;
+    case 0x0344: rs(D3DRS_SRCBLEND, gl_blend(Value)); break;
+    case 0x0348: rs(D3DRS_DESTBLEND, gl_blend(Value)); break;
+    case 0x034C: rs(D3DRS_BLENDFACTOR, Value); break;
+    case 0x0350: rs(D3DRS_BLENDOP, gl_blendop(Value)); break;
+    case 0x0354: rs(D3DRS_ZFUNC, gl_cmp(Value)); break;
+    case 0x0358: /* NV2A colour mask: A 0x01000000, R 0x00010000, G 0x00000100, B 0x00000001 */
+        rs(D3DRS_COLORWRITEENABLE, ((Value & 0x00010000) ? D3DCOLORWRITEENABLE_RED : 0) |
+                                       ((Value & 0x00000100) ? D3DCOLORWRITEENABLE_GREEN : 0) |
+                                       ((Value & 0x00000001) ? D3DCOLORWRITEENABLE_BLUE : 0) |
+                                       ((Value & 0x01000000) ? D3DCOLORWRITEENABLE_ALPHA : 0));
+        break;
+    case 0x035C: rs(D3DRS_ZWRITEENABLE, Value != 0); break;
+    case 0x0360: rs(D3DRS_STENCILWRITEMASK, Value); break;
+    case 0x0364: rs(D3DRS_STENCILFUNC, gl_cmp(Value)); break;
+    case 0x0368: rs(D3DRS_STENCILREF, Value); break;
+    case 0x036C: rs(D3DRS_STENCILMASK, Value); break;
+    case 0x0370: rs(D3DRS_STENCILFAIL, gl_stencilop(Value)); break;
+    case 0x0374: rs(D3DRS_STENCILZFAIL, gl_stencilop(Value)); break;
+    case 0x0378: rs(D3DRS_STENCILPASS, gl_stencilop(Value)); break;
+    case 0x037C: rs(D3DRS_SHADEMODE, Value == 0x1D00 ? D3DSHADE_FLAT : D3DSHADE_GOURAUD); break;
+    default: {
+        static DWORD seen[64];
+        static unsigned n;
+        unsigned i;
+        for (i = 0; i < n && seen[i] != (Method & 0x1FFC); i++)
+            ;
+        if (i == n && n < 64) {
+            seen[n++] = Method & 0x1FFC;
+            log_printf("d3d: render-state method %04lX not mapped (value %08lX)\n", Method & 0x1FFC, Value);
+        }
+    }
+    }
+}
+
+/* Culling: Xbox D3D's own D3DCULL values (NONE 0, CW 0x900, CCW 0x901). */
+static void XBAPI hle_D3DDevice_SetRenderState_CullMode(DWORD v)
+{
+    rs(D3DRS_CULLMODE, v == 0x900 ? D3DCULL_CW : v == 0x901 ? D3DCULL_CCW : D3DCULL_NONE);
+}
+
+static void XBAPI hle_D3DDevice_SetRenderState_ZEnable(DWORD v)
+{
+    rs(D3DRS_ZENABLE, v ? D3DZB_TRUE : D3DZB_FALSE);
+}
+
+static void XBAPI hle_D3DDevice_SetRenderState_FillMode(DWORD v)
+{
+    rs(D3DRS_FILLMODE, v == 0x1B00 ? D3DFILL_POINT : v == 0x1B01 ? D3DFILL_WIREFRAME : D3DFILL_SOLID);
+}
+
+static void XBAPI hle_D3DDevice_SetRenderState_StencilEnable(DWORD v)
+{
+    rs(D3DRS_STENCILENABLE, v != 0);
+}
+
+static void XBAPI hle_D3DDevice_SetRenderState_StencilFail(DWORD v)
+{
+    rs(D3DRS_STENCILFAIL, gl_stencilop(v));
+}
+
+static void XBAPI hle_D3DDevice_SetRenderState_TextureFactor(DWORD v)
+{
+    rs(D3DRS_TEXTUREFACTOR, v);
+}
+
+static void XBAPI hle_D3DDevice_SetRenderState_FogColor(DWORD v)
+{
+    rs(D3DRS_FOGCOLOR, v);
+}
+
+static void XBAPI hle_D3DDevice_SetRenderState_NormalizeNormals(DWORD v)
+{
+    rs(D3DRS_NORMALIZENORMALS, v != 0);
+}
+
+/* Xbox texture-stage state: D3D keeps TextureState[stage][32] at 0x19E9A0 and the engine writes
+ * it inline (dirty flags at 0x19E998), as in ReWhacked (4831 had it at 0x2529C0). Indices, as
+ * in 4831 (TexCoordIndex 28 at 0x19EA10 and ColorKeyColor 30 at 0x19EA18 confirm the layout):
+ * 0 ADDRESSU 1 ADDRESSV 2 ADDRESSW 3 MAGFILTER 4 MINFILTER 5 MIPFILTER 6 MIPMAPLODBIAS
+ * 7 MAXMIPLEVEL 8 MAXANISOTROPY 9 COLORKEYOP 10 COLORSIGN 11 ALPHAKILL 12 COLOROP 13 COLORARG0
+ * 14 COLORARG1 15 COLORARG2 16 ALPHAOP 17 ALPHAARG0 18 ALPHAARG1 19 ALPHAARG2 20 RESULTARG
+ * 21 TEXTURETRANSFORMFLAGS 22..27 bump env 28 TEXCOORDINDEX 29 BORDERCOLOR 30 COLORKEYCOLOR */
+#define XTEXTURE_STATE ((DWORD(*)[32])(UINT_PTR)0x0019E9A0u)
+
+static void XBAPI hle_D3DDevice_SetTextureState_TexCoordIndex(DWORD Stage, DWORD Value)
+{
+    if (Stage < 4)
+        XTEXTURE_STATE[Stage][28] = Value;
+}
+
+static void XBAPI hle_D3DDevice_SetTextureState_BorderColor(DWORD Stage, DWORD Value)
+{
+    if (Stage < 4)
+        XTEXTURE_STATE[Stage][29] = Value;
+}
+
+static void XBAPI hle_D3DDevice_SetTextureState_ColorKeyColor(DWORD Stage, DWORD Value)
+{
+    if (Stage < 4)
+        XTEXTURE_STATE[Stage][30] = Value;
+}
+
+/* Type is the texture-state index itself (22..27: BUMPENVMAT00..BUMPENVLOFFSET). */
+static void XBAPI hle_D3DDevice_SetTextureState_BumpEnv(DWORD Stage, DWORD Type, DWORD Value)
+{
+    if (Stage < 4 && Type < 32)
+        XTEXTURE_STATE[Stage][Type] = Value;
+}
+
+/* Xbox D3DTOP numbering differs from PC from 13 on. */
+static DWORD xbox_top(DWORD op)
+{
+    static const BYTE map[27] = {
+        0, D3DTOP_DISABLE, D3DTOP_SELECTARG1, D3DTOP_SELECTARG2, D3DTOP_MODULATE, D3DTOP_MODULATE2X,
+        D3DTOP_MODULATE4X, D3DTOP_ADD, D3DTOP_ADDSIGNED, D3DTOP_ADDSIGNED2X, D3DTOP_SUBTRACT, D3DTOP_ADDSMOOTH,
+        D3DTOP_BLENDDIFFUSEALPHA, D3DTOP_BLENDCURRENTALPHA, D3DTOP_BLENDTEXTUREALPHA, D3DTOP_BLENDFACTORALPHA,
+        D3DTOP_BLENDTEXTUREALPHAPM, D3DTOP_PREMODULATE, D3DTOP_MODULATEALPHA_ADDCOLOR,
+        D3DTOP_MODULATECOLOR_ADDALPHA, D3DTOP_MODULATEINVALPHA_ADDCOLOR, D3DTOP_MODULATEINVCOLOR_ADDALPHA,
+        D3DTOP_DOTPRODUCT3, D3DTOP_MULTIPLYADD, D3DTOP_LERP, D3DTOP_BUMPENVMAP, D3DTOP_BUMPENVMAPLUMINANCE};
+    return op < 27 && map[op] ? map[op] : D3DTOP_DISABLE;
+}
+
+static DWORD xbox_address(DWORD a)
+{
+    return a == 5 ? D3DTADDRESS_CLAMP /* CLAMPTOEDGE */ : (a >= 1 && a <= 4) ? a : D3DTADDRESS_WRAP;
+}
+
+static DWORD xbox_filter(DWORD f)
+{
+    return f <= 3 ? f : D3DTEXF_LINEAR; /* quincunx / gaussian cubic -> linear */
+}
+
+static void apply_texture_stages(void)
+{
+    for (DWORD s = 0; s < 4; s++) {
+        const DWORD *t = XTEXTURE_STATE[s];
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_ADDRESSU, xbox_address(t[0]));
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_ADDRESSV, xbox_address(t[1]));
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_ADDRESSW, xbox_address(t[2]));
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MAGFILTER, xbox_filter(t[3]));
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MINFILTER, xbox_filter(t[4]));
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MIPFILTER, xbox_filter(t[5]));
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MIPMAPLODBIAS, t[6]);
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MAXMIPLEVEL, t[7]);
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MAXANISOTROPY, t[8] ? t[8] : 1);
+        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_BORDERCOLOR, t[29]);
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_COLOROP, xbox_top(t[12]));
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_COLORARG0, t[13]);
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_COLORARG1, t[14]);
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_COLORARG2, t[15]);
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_ALPHAOP, xbox_top(t[16]));
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_ALPHAARG0, t[17]);
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_ALPHAARG1, t[18]);
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_ALPHAARG2, t[19]);
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_RESULTARG, t[20]);
+        /* Texture transforms are done by the vertex programs; texcoords arrive final. */
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_TEXCOORDINDEX, s);
+    }
+}
+
+/* ------------------------------------------------------------------ transforms, lights, viewport */
+
+/* Xbox D3DTRANSFORMSTATETYPE: VIEW 0, PROJECTION 1, TEXTURE0-3 2..5, WORLD 6, WORLD1-3 7..9.
+ * Kept for GetTransform (the engine reads non-projection states back, 0x154D00) and passed to
+ * the host for fixed-function draws. */
+static D3DMATRIX g_xform[10];
+
+static D3DTRANSFORMSTATETYPE host_transform(DWORD s)
+{
+    switch (s) {
+    case 0: return D3DTS_VIEW;
+    case 1: return D3DTS_PROJECTION;
+    case 2: case 3: case 4: case 5: return (D3DTRANSFORMSTATETYPE)(D3DTS_TEXTURE0 + (s - 2));
+    case 6: return D3DTS_WORLD;
+    default: return (D3DTRANSFORMSTATETYPE)D3DTS_WORLDMATRIX(s - 6);
+    }
+}
+
+static HRESULT XBAPI hle_D3DDevice_SetTransform(DWORD State, const D3DMATRIX *pMatrix)
+{
+    if (State < 10 && pMatrix) {
+        g_xform[State] = *pMatrix;
+        if (g_dev)
+            IDirect3DDevice9Ex_SetTransform(g_dev, host_transform(State), pMatrix);
+    }
+    return S_OK;
+}
+
+static HRESULT XBAPI hle_D3DDevice_GetTransform(DWORD State, D3DMATRIX *pMatrix)
+{
+    if (State < 10 && pMatrix)
+        *pMatrix = g_xform[State];
+    return S_OK;
+}
+
+/* D3DMATERIAL8 and D3DLIGHT8 share D3D9's layouts. */
+static HRESULT XBAPI hle_D3DDevice_SetMaterial(const D3DMATERIAL9 *pMaterial)
+{
+    if (g_dev && pMaterial)
+        IDirect3DDevice9Ex_SetMaterial(g_dev, pMaterial);
+    return S_OK;
+}
+
+static HRESULT XBAPI hle_D3DDevice_SetLight(DWORD Index, const D3DLIGHT9 *pLight)
+{
+    if (g_dev && pLight)
+        IDirect3DDevice9Ex_SetLight(g_dev, Index, pLight);
+    return S_OK;
+}
+
+static HRESULT XBAPI hle_D3DDevice_LightEnable(DWORD Index, BOOL Enable)
+{
+    if (g_dev)
+        IDirect3DDevice9Ex_LightEnable(g_dev, Index, Enable);
+    return S_OK;
+}
+
+/* The host viewport stays the full render target: programs output screen-space pixels, which
+ * the vertex epilogue maps over the whole target. The Xbox viewport feeds c-38/c-37, and its
+ * clipping becomes a scissor rect (split screen; ReWhacked). */
+static HRESULT XBAPI hle_D3DDevice_SetViewport(const D3DVIEWPORT9 *pViewport)
+{
+    const D3DVIEWPORT9 *v = pViewport;
+    set_screen_constants(pViewport);
+    if (g_dev) {
+        int full = v->X == 0 && v->Y == 0 && v->Width >= g_xw && v->Height >= g_xh;
+        g_vp_rect.left = (LONG)(v->X * g_sx + 0.5f);
+        g_vp_rect.top = (LONG)(v->Y * g_sy + 0.5f);
+        g_vp_rect.right = (LONG)((v->X + v->Width) * g_sx + 0.5f);
+        g_vp_rect.bottom = (LONG)((v->Y + v->Height) * g_sy + 0.5f);
+        g_vp_partial = !full;
+        if (g_vp_partial)
+            IDirect3DDevice9Ex_SetScissorRect(g_dev, &g_vp_rect);
+        IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_SCISSORTESTENABLE, g_vp_partial ? TRUE : FALSE);
+        {
+            SURVEY(16)
+            log_printf("d3d: viewport %lu,%lu %lux%lu z %.2f-%.2f%s\n", v->X, v->Y, v->Width, v->Height,
+                       (double)v->MinZ, (double)v->MaxZ, g_vp_partial ? " (clipped)" : "");
+        }
+    }
+    return S_OK;
+}
+
+/* Render targets: drawing into textures (the engine's 512x512 and 128x128 R5G6B5 targets) is
+ * not done yet; everything goes to the back buffer, and the target texture keeps its contents. */
+static XD3DSurface *g_cur_rt;
+
+static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, XD3DSurface *pNewZStencil)
+{
+    if (pRenderTarget)
+        g_cur_rt = pRenderTarget;
+    {
+        SURVEY(12)
+        log_printf("survey: SetRenderTarget %p%s fmt %08X size %08X, z %p%s (from %08X)\n", (void *)pRenderTarget,
+                   pRenderTarget == &g_backbuffer ? " (back buffer)" : "",
+                   pRenderTarget ? pRenderTarget->Container.Format : 0, pRenderTarget ? pRenderTarget->Container.Size : 0,
+                   (void *)pNewZStencil, pNewZStencil == &g_depth ? " (depth)" : "",
+                   (unsigned)(UINT_PTR)_ReturnAddress());
+    }
+    return S_OK;
+}
+
+/* Is the current target the back buffer? Draws into other targets are skipped for now, so
+ * render-to-texture passes don't land on the screen. */
+static int drawing_to_backbuffer(void)
+{
+    return !g_cur_rt || g_cur_rt == &g_backbuffer;
+}
+
+/* ------------------------------------------------------------------ textures and streams */
+
+static HRESULT XBAPI hle_D3DDevice_SetTexture(DWORD Stage, const XD3DPixelContainer *pTexture)
+{
+    {
+        SURVEY(24)
+        if (pTexture)
+            log_printf("survey: SetTexture stage %lu %p data %08X format %08X (fmt %02X dim %u mips %u %ux%u) size "
+                       "%08X\n", Stage, (const void *)pTexture, pTexture->Resource.Data, pTexture->Format,
+                       XFMT_FORMAT(pTexture->Format), XFMT_DIMENSION(pTexture->Format), XFMT_MIPMAPS(pTexture->Format),
+                       1u << XFMT_USIZE(pTexture->Format), 1u << XFMT_VSIZE(pTexture->Format), pTexture->Size);
+    }
+    if (Stage < 4)
+        g_textures[Stage] = pTexture;
+    return S_OK;
+}
+
+/* Xbox index buffers are plain memory. The engine computes the index pointer for
+ * DrawIndexedVertices as D3D__IndexData + start (0x15697A), so SetIndices sets it, as the
+ * original does. */
+#define D3D_INDEX_DATA_GLOBAL 0x0019E994u
+
+static HRESULT XBAPI hle_D3DDevice_SetIndices(const XD3DResource *pIndexData, UINT BaseVertexIndex)
+{
+    *(DWORD *)(UINT_PTR)D3D_INDEX_DATA_GLOBAL = pIndexData ? pIndexData->Data : 0;
+    g_base_vertex = BaseVertexIndex;
+    return S_OK;
+}
+
+static HRESULT XBAPI hle_D3DDevice_SetStreamSource(UINT Stream, XD3DResource *pStreamData, UINT Stride)
+{
+    if (Stream == 0) {
+        g_stream_vb = pStreamData;
+        g_stream_stride = Stride;
+    }
+    else {
+        TODO_ONCE("SetStreamSource on streams other than 0");
+    }
+    return S_OK;
+}
+
+/* ------------------------------------------------------------------ drawing */
+
+/* Bind the current vertex program (or FVF), constants, textures and pixel shader (ReWhacked).
+ * Returns 0 to skip the draw. */
+static int prepare_draw(void)
+{
+    if (!g_dev)
+        return 0;
+    if (!drawing_to_backbuffer()) {
+        g_skipped++;
+        return 0;
+    }
+    if (!g_in_scene) {
+        IDirect3DDevice9Ex_BeginScene(g_dev);
+        g_in_scene = 1;
+    }
+    if (g_cur_vs & 1) {
+        unsigned i = g_cur_vs >> 1;
+        if (i >= g_vs_count || !g_vs_func[i])
+            return 0;
+        ensure_vs(i);
+        if (g_vs_state[i] != 1) {
+            g_skipped++;
+            return 0;
+        }
+        IDirect3DDevice9Ex_SetVertexShader(g_dev, g_vs_host[i]);
+        IDirect3DDevice9Ex_SetVertexDeclaration(g_dev, g_vs_vdecl[i]);
+    }
+    else {
+        IDirect3DDevice9Ex_SetVertexShader(g_dev, NULL);
+        IDirect3DDevice9Ex_SetFVF(g_dev, g_cur_vs);
+    }
+    for (DWORD s = 0; s < 4; s++) {
+        float scale[2] = {1.0f, 1.0f};
+        LONGLONG t0 = perf_now();
+        IDirect3DBaseTexture9 *t = g_textures[s] ? tex_get((IDirect3DDevice9 *)g_dev, g_textures[s], scale) : NULL;
+        perf_end(PERF_TEX, t0);
+        IDirect3DDevice9Ex_SetTexture(g_dev, s, t);
+        g_vconst[VSH_C_TEXSCALE + s][0] = scale[0];
+        g_vconst[VSH_C_TEXSCALE + s][1] = scale[1];
+        g_vconst[VSH_C_TEXSCALE + s][2] = g_vconst[VSH_C_TEXSCALE + s][3] = 1.0f;
+        if (s == 0 && !t)
+            g_untextured++;
+    }
+    apply_texture_stages();
+    /* Pixel shader: register combiners when the game set one, else fixed-function stages. */
+    {
+        IDirect3DPixelShader9 *ps = NULL;
+        if (g_cur_ps & 1) {
+            unsigned i = g_cur_ps >> 1;
+            if (i < g_ps_count) {
+                unsigned bound = 0, v;
+                PsVariant *pv;
+                for (unsigned k = 0; k < 4; k++) {
+                    const XD3DPixelContainer *t = g_textures[k];
+                    if (t)
+                        bound |= (tex_is_depth(t) ? PSH_BOUND_DEPTH
+                                  : (t->Format & XFMT_CUBEMAP) ? PSH_BOUND_CUBE
+                                  : XFMT_DIMENSION(t->Format) == 3 ? PSH_BOUND_VOLUME : PSH_BOUND_2D) << (2 * k);
+                }
+                for (v = 0; v < PS_VARIANTS && g_ps_var[i][v].state && g_ps_var[i][v].key != bound; v++)
+                    ;
+                if (v == PS_VARIANTS)
+                    v = PS_VARIANTS - 1; /* full: recompile into the last slot */
+                pv = &g_ps_var[i][v];
+                if (!pv->state || pv->key != bound) {
+                    static char hlsl[32 * 1024];
+                    LONGLONG t0;
+                    if (pv->host)
+                        IDirect3DPixelShader9_Release(pv->host);
+                    pv->key = bound;
+                    t0 = perf_now();
+                    pv->host = psh_compile((IDirect3DDevice9 *)g_dev, g_ps_def[i], bound, i);
+                    perf_end(PERF_PSC, t0);
+                    pv->state = pv->host ? 1 : 2;
+                    if (psh_to_hlsl(g_ps_def[i], bound, hlsl, sizeof hlsl))
+                        log_printf("psh: shader %u (bound %02X) first used at frame %lu (%s):\n%s\n", i, bound,
+                                   g_frame, pv->host ? "ok" : "FAILED", hlsl);
+                }
+                ps = pv->state == 1 ? pv->host : NULL;
+                if (ps) {
+                    float pc[18][4];
+                    psh_constants(g_ps_def[i], (const float(*)[4])g_psconst, pc);
+                    IDirect3DDevice9Ex_SetPixelShaderConstantF(g_dev, 0, pc[0], 18);
+                }
+            }
+        }
+        IDirect3DDevice9Ex_SetPixelShader(g_dev, ps);
+    }
+    IDirect3DDevice9Ex_SetVertexShaderConstantF(g_dev, 0, g_vconst[0], VSH_CONSTANTS);
+    g_draws++;
+    return 1;
+}
+
+/* Xbox primitive type -> D3D9. Quad lists become indexed triangle lists (*quads = 1). */
+static int convert_prim(DWORD xprim, UINT count, D3DPRIMITIVETYPE *pt, UINT *prims, int *quads)
+{
+    *quads = 0;
+    switch (xprim) {
+    case 1: *pt = D3DPT_POINTLIST; *prims = count; break;
+    case 2: *pt = D3DPT_LINELIST; *prims = count / 2; break;
+    case 3: /* line loop: closing segment missing for now */
+    case 4: *pt = D3DPT_LINESTRIP; *prims = count > 1 ? count - 1 : 0; break;
+    case 5: *pt = D3DPT_TRIANGLELIST; *prims = count / 3; break;
+    case 6: case 9: *pt = D3DPT_TRIANGLESTRIP; *prims = count > 2 ? count - 2 : 0; break;
+    case 7: case 10: *pt = D3DPT_TRIANGLEFAN; *prims = count > 2 ? count - 2 : 0; break;
+    case 8: *pt = D3DPT_TRIANGLELIST; *prims = count / 4 * 2; *quads = 1; break;
+    default: return 0;
+    }
+    return *prims > 0;
+}
+
+static WORD g_quad_idx[65536 / 4 * 6];
+
+/* Pre-transformed (XYZRHW) vertices are in Xbox screen pixels; at another render resolution
+ * they are copied with x and y scaled. Vertices first..last of `verts` are converted; the
+ * returned pointer is used with the same indices. */
+static const BYTE *scale_rhw(const BYTE *verts, UINT first, UINT last, UINT stride)
+{
+    static BYTE *buf;
+    static size_t cap;
+    size_t need = (size_t)(last + 1) * stride;
+    if ((g_cur_vs & 1) || (g_cur_vs & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW || (g_sx == 1.0f && g_sy == 1.0f))
+        return verts;
+    if (need > cap) {
+        BYTE *n = (BYTE *)realloc(buf, need);
+        if (!n)
+            return verts;
+        buf = n;
+        cap = need;
+    }
+    for (UINT i = first; i <= last; i++) {
+        float *xy = (float *)(buf + (size_t)i * stride);
+        memcpy(xy, verts + (size_t)i * stride, stride);
+        xy[0] *= g_sx;
+        xy[1] *= g_sy;
+    }
+    return buf;
+}
+
+/* Draw `count` vertices from `verts` (optionally indexed by 16-bit `idx`). */
+static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, const WORD *idx)
+{
+    D3DPRIMITIVETYPE pt;
+    UINT prims, lo = 0, hi = 0;
+    int quads;
+    LONGLONG t0 = perf_now();
+    if (!verts || !stride || !convert_prim(xprim, count, &pt, &prims, &quads) || !prepare_draw())
+        return;
+    if (quads) {
+        UINT q = count / 4;
+        if (q > 65536 / 4)
+            return;
+        for (UINT i = 0; i < q; i++) {
+            WORD *d = g_quad_idx + i * 6;
+            WORD a = idx ? idx[i * 4] : (WORD)(i * 4), b = idx ? idx[i * 4 + 1] : (WORD)(i * 4 + 1);
+            WORD c = idx ? idx[i * 4 + 2] : (WORD)(i * 4 + 2), e = idx ? idx[i * 4 + 3] : (WORD)(i * 4 + 3);
+            d[0] = a; d[1] = b; d[2] = c;
+            d[3] = a; d[4] = c; d[5] = e;
+        }
+        idx = g_quad_idx;
+        count = q * 6;
+    }
+    if (idx) {
+        lo = 0xFFFF;
+        for (UINT i = 0; i < count; i++) {
+            if (idx[i] < lo)
+                lo = idx[i];
+            if (idx[i] > hi)
+                hi = idx[i];
+        }
+        verts = scale_rhw(verts, lo, hi, stride);
+        IDirect3DDevice9Ex_DrawIndexedPrimitiveUP(g_dev, pt, lo, hi - lo + 1, prims, idx, D3DFMT_INDEX16, verts, stride);
+    }
+    else {
+        verts = scale_rhw(verts, 0, count - 1, stride);
+        IDirect3DDevice9Ex_DrawPrimitiveUP(g_dev, pt, prims, verts, stride);
+    }
+    perf_end(PERF_DRAW, t0);
+}
+
+static void XBAPI hle_D3DDevice_DrawVerticesUP(DWORD PrimitiveType, UINT VertexCount, const void *pData, UINT Stride)
+{
+    draw_up(PrimitiveType, VertexCount, (const BYTE *)pData, Stride, NULL);
+}
+
+static void XBAPI hle_D3DDevice_DrawIndexedVerticesUP(DWORD PrimitiveType, UINT VertexCount, const WORD *pIndexData,
+                                                      const void *pVertexData, UINT Stride)
+{
+    draw_up(PrimitiveType, VertexCount, (const BYTE *)pVertexData, Stride, pIndexData);
+}
+
+static const BYTE *stream_data(void)
+{
+    if (!g_stream_vb || !g_stream_vb->Data || !g_stream_stride) {
+        SURVEY(5)
+        log_printf("survey: draw from stream 0 skipped: vb %p stride %u\n", (void *)g_stream_vb, g_stream_stride);
+        return NULL;
+    }
+    return (const BYTE *)(UINT_PTR)g_stream_vb->Data;
+}
+
+/* DrawVertices(type, start vertex, count): non-indexed, from stream 0. */
+static void XBAPI hle_D3DDevice_DrawVertices(DWORD PrimitiveType, UINT StartVertex, UINT VertexCount)
+{
+    const BYTE *v = stream_data();
+    if (v)
+        draw_up(PrimitiveType, VertexCount, v + (SIZE_T)StartVertex * g_stream_stride, g_stream_stride, NULL);
+}
+
+/* DrawIndexedVertices(type, count, indices): indices already offset by the engine; vertices
+ * from stream 0 with SetIndices' base vertex. */
+static void XBAPI hle_D3DDevice_DrawIndexedVertices(DWORD PrimitiveType, UINT VertexCount, const WORD *pIndexData)
+{
+    const BYTE *v = stream_data();
+    if (v && pIndexData)
+        draw_up(PrimitiveType, VertexCount, v + (SIZE_T)g_base_vertex * g_stream_stride, g_stream_stride, pIndexData);
 }
 
 /* ------------------------------------------------------------------ not yet implemented */
@@ -764,48 +1651,18 @@ static HRESULT XBAPI hle_D3DDevice_CreatePixelShader(const void *pPSDef, DWORD *
 #define D DWORD
 STUB(SetGammaRamp, 0, D a, D b)
 STUB(GetGammaRamp, 0, D a)
-STUB(SetTransform, 0, D a, D b)
-STUB(GetTransform, 0, D a, D b)
-STUB(SetMaterial, 0, D a)
 STUB(GetTile, 0, D a, D b)
 STUB(SetTile, 0, D a, D b)
-STUB(SetRenderTarget, 0, D a, D b)
 STUB(DisplayQuery_18E120, 0, D a)
 STUB(CopyRects, 0, D a, D b, D c, D d, D e)
-STUB(SetViewport, 0, D a)
-STUB(SetLight, 0, D a, D b)
-STUB(LightEnable, 0, D a, D b)
 STUB(GetTexture2, 0, D a, D b)
-STUB(SetTexture, 0, D a, D b)
-STUB(SetIndices, 0, D a, D b)
 STUB(SetRenderState_1arg, 0, D a)
-STUB(SetTextureState_2arg, 0, D a, D b)
-STUB(SetTextureState_BumpEnv, 0, D a, D b, D c)
-STUB(SetStreamSource, 0, D a, D b, D c)
-STUB(SetShaderConstantMode, 0, D a)
-STUB(DeleteVertexShader, 0, D a)
-STUB(SetVertexShader, 0, D a)
-STUB(SetVertexShaderConstant, 0, D a, D b, D c)
-STUB(DeletePixelShader, 0, D a)
-STUB(SetPixelShader, 0, D a)
-STUB(SetPixelShaderConstant, 0, D a, D b, D c)
-STUB(DrawVerticesUP, 0, D a, D b, D c, D d)
-STUB(DrawIndexedVerticesUP, 0, D a, D b, D c, D d, D e)
-STUB(DrawVertices, 0, D a, D b, D c)
-STUB(DrawIndexedVertices, 0, D a, D b, D c)
-STUB(SetVertexData2f, 0, D a, D b, D c)
+STUB(SetVertexData2f, 0, D a, D b, D c)                /* immediate mode (Begin/SetVertexData/End) */
 STUB(SetVertexData4f, 0, D a, D b, D c, D d, D e)
 STUB(Begin, 0, D a)
 STUB(End, 0, void)
 #undef D
 #undef STUB
-
-/* SetRenderState_Simple(method = ecx, value = edx): an NV2A method and its value. */
-static void FASTCALL stub_SetRenderState_Simple(DWORD Method, DWORD Value)
-{
-    SURVEY(3)
-    log_printf("d3d: SetRenderState_Simple not implemented yet (method %04lX value %08lX)\n", Method, Value);
-}
 #pragma warning(pop)
 
 /* ------------------------------------------------------------------ patch table */
@@ -842,64 +1699,64 @@ const HlePatch g_d3d_patches[] = {
     P(D3DResource_Release, hle_D3DResource_Release),
     /* shaders */
     P(D3DDevice_CreateVertexShader, hle_D3DDevice_CreateVertexShader),
-    P(D3DDevice_DeleteVertexShader, stub_DeleteVertexShader),
-    P(D3DDevice_SetVertexShader, stub_SetVertexShader),
-    P(D3DDevice_SetVertexShaderConstant, stub_SetVertexShaderConstant),
-    P(D3DDevice_SetShaderConstantMode, stub_SetShaderConstantMode),
+    P(D3DDevice_DeleteVertexShader, hle_D3DDevice_DeleteVertexShader),
+    P(D3DDevice_SetVertexShader, hle_D3DDevice_SetVertexShader),
+    P(D3DDevice_SetVertexShaderConstant, hle_D3DDevice_SetVertexShaderConstant),
+    P(D3DDevice_SetShaderConstantMode, hle_D3DDevice_SetShaderConstantMode),
     P(D3DDevice_CreatePixelShader, hle_D3DDevice_CreatePixelShader),
-    P(D3DDevice_DeletePixelShader, stub_DeletePixelShader),
-    P(D3DDevice_SetPixelShader, stub_SetPixelShader),
-    P(D3DDevice_SetPixelShaderConstant, stub_SetPixelShaderConstant),
+    P(D3DDevice_DeletePixelShader, hle_D3DDevice_DeletePixelShader),
+    P(D3DDevice_SetPixelShader, hle_D3DDevice_SetPixelShader),
+    P(D3DDevice_SetPixelShaderConstant, hle_D3DDevice_SetPixelShaderConstant),
     /* transforms, lights, viewport, targets */
     P(D3DDevice_SetGammaRamp, stub_SetGammaRamp),
     P(D3DDevice_GetGammaRamp, stub_GetGammaRamp),
-    P(D3DDevice_SetTransform, stub_SetTransform),
-    P(D3DDevice_GetTransform, stub_GetTransform),
-    P(D3DDevice_SetMaterial, stub_SetMaterial),
-    P(D3DDevice_SetLight, stub_SetLight),
-    P(D3DDevice_LightEnable, stub_LightEnable),
-    P(D3DDevice_SetViewport, stub_SetViewport),
-    P(D3DDevice_SetRenderTarget, stub_SetRenderTarget),
+    P(D3DDevice_SetTransform, hle_D3DDevice_SetTransform),
+    P(D3DDevice_GetTransform, hle_D3DDevice_GetTransform),
+    P(D3DDevice_SetMaterial, hle_D3DDevice_SetMaterial),
+    P(D3DDevice_SetLight, hle_D3DDevice_SetLight),
+    P(D3DDevice_LightEnable, hle_D3DDevice_LightEnable),
+    P(D3DDevice_SetViewport, hle_D3DDevice_SetViewport),
+    P(D3DDevice_SetRenderTarget, hle_D3DDevice_SetRenderTarget),
     P(D3DDevice_CopyRects, stub_CopyRects),
     P(D3DDevice_GetTile, stub_GetTile),
     P(D3DDevice_SetTile, stub_SetTile),
     /* textures and streams */
     P(D3DDevice_GetTexture2, stub_GetTexture2),
-    P(D3DDevice_SetTexture, stub_SetTexture),
-    P(D3DDevice_SetIndices, stub_SetIndices),
-    P(D3DDevice_SetStreamSource, stub_SetStreamSource),
+    P(D3DDevice_SetTexture, hle_D3DDevice_SetTexture),
+    P(D3DDevice_SetIndices, hle_D3DDevice_SetIndices),
+    P(D3DDevice_SetStreamSource, hle_D3DDevice_SetStreamSource),
     /* draws */
-    P(D3DDevice_DrawVerticesUP, stub_DrawVerticesUP),
-    P(D3DDevice_DrawIndexedVerticesUP, stub_DrawIndexedVerticesUP),
-    P(D3DDevice_DrawVertices, stub_DrawVertices),
-    P(D3DDevice_DrawIndexedVertices, stub_DrawIndexedVertices),
+    P(D3DDevice_DrawVerticesUP, hle_D3DDevice_DrawVerticesUP),
+    P(D3DDevice_DrawIndexedVerticesUP, hle_D3DDevice_DrawIndexedVerticesUP),
+    P(D3DDevice_DrawVertices, hle_D3DDevice_DrawVertices),
+    P(D3DDevice_DrawIndexedVertices, hle_D3DDevice_DrawIndexedVertices),
     P(D3DDevice_SetVertexData2f, stub_SetVertexData2f),
     P(D3DDevice_SetVertexData4f, stub_SetVertexData4f),
     P(D3DDevice_Begin, stub_Begin),
     P(D3DDevice_End, stub_End),
     /* render and texture state */
-    P(D3DDevice_SetRenderState_Simple, stub_SetRenderState_Simple),
+    P(D3DDevice_SetRenderState_Simple, hle_D3DDevice_SetRenderState_Simple),
+    P(D3DDevice_SetRenderState_CullMode, hle_D3DDevice_SetRenderState_CullMode),
+    P(D3DDevice_SetRenderState_FrontFace, stub_SetRenderState_1arg),
+    P(D3DDevice_SetRenderState_ZEnable, hle_D3DDevice_SetRenderState_ZEnable),
+    P(D3DDevice_SetRenderState_FillMode, hle_D3DDevice_SetRenderState_FillMode),
+    P(D3DDevice_SetRenderState_StencilEnable, hle_D3DDevice_SetRenderState_StencilEnable),
+    P(D3DDevice_SetRenderState_StencilFail, hle_D3DDevice_SetRenderState_StencilFail),
+    P(D3DDevice_SetRenderState_TextureFactor, hle_D3DDevice_SetRenderState_TextureFactor),
+    P(D3DDevice_SetRenderState_FogColor, hle_D3DDevice_SetRenderState_FogColor),
+    P(D3DDevice_SetRenderState_NormalizeNormals, hle_D3DDevice_SetRenderState_NormalizeNormals),
     P(D3DDevice_SetRenderState_MultiSampleMode, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_MultiSampleRenderTargetMode, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_PSTextureModes, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_EdgeAntiAlias, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_ShadowFunc, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_FogColor, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_CullMode, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_FrontFace, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_NormalizeNormals, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_TextureFactor, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_LineWidth, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_Dxt1NoiseEnable, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_ZBias, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_LogicOp, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_FillMode, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_BackFillMode, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_TwoSidedLighting, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_VertexBlend, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_ZEnable, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_StencilEnable, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_StencilFail, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_YuvEnable, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_OcclusionCullEnable, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_StencilCullEnable, stub_SetRenderState_1arg),
@@ -908,10 +1765,10 @@ const HlePatch g_d3d_patches[] = {
     P(D3DDevice_SetRenderState_DoNotCullUncompressed, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_MultiSampleAntiAlias, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_MultiSampleMask, stub_SetRenderState_1arg),
-    P(D3DDevice_SetTextureState_TexCoordIndex, stub_SetTextureState_2arg),
-    P(D3DDevice_SetTextureState_BorderColor, stub_SetTextureState_2arg),
-    P(D3DDevice_SetTextureState_ColorKeyColor, stub_SetTextureState_2arg),
-    P(D3DDevice_SetTextureState_BumpEnv, stub_SetTextureState_BumpEnv),
+    P(D3DDevice_SetTextureState_TexCoordIndex, hle_D3DDevice_SetTextureState_TexCoordIndex),
+    P(D3DDevice_SetTextureState_BorderColor, hle_D3DDevice_SetTextureState_BorderColor),
+    P(D3DDevice_SetTextureState_ColorKeyColor, hle_D3DDevice_SetTextureState_ColorKeyColor),
+    P(D3DDevice_SetTextureState_BumpEnv, hle_D3DDevice_SetTextureState_BumpEnv),
 };
 #undef P
 const unsigned g_d3d_patch_count = sizeof g_d3d_patches / sizeof g_d3d_patches[0];
