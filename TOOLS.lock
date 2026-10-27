@@ -1,0 +1,69 @@
+# Pinned tool versions. tools/doctor.py checks these.
+# Downloads are verified against the publisher's SHA-256.
+
+[jdk]
+version = "21.0.12.101"
+source  = "winget Microsoft.OpenJDK.21"
+
+[ghidra]
+version = "12.1.4"
+file    = "ghidra_12.1.4_PUBLIC_20260921.zip"
+sha256  = "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db"
+source  = "github.com/NationalSecurityAgency/ghidra releases"
+
+[ghidra-xbe]
+version = "build-202610161023"
+file    = "ghidra_12.1.4_PUBLIC_20261016_ghidra-xbe.zip"
+sha256  = "339b2f67563bbb8b5217740319b7f3eae9e9bbacf1f3a8aa29151f7ecb7d5152"
+source  = "github.com/XboxDev/ghidra-xbe releases"
+install = "%APPDATA%\\ghidra\\ghidra_12.1.4_PUBLIC\\Extensions\\ghidra-xbe"
+
+[gradle]
+version = "9.8.1"
+sha256  = "dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f"
+source  = "services.gradle.org (only used to build GhidraMCP)"
+
+[ghidra-mcp]
+# LaurieWired/GhidraMCP, built from reviewed source; no prebuilt binaries.
+version = "2.0.0"
+commit  = "1e980252087b2479a21b9ca6d82d5829538651a7"
+source  = "github.com/LaurieWired/GhidraMCP"
+install = "extension: %APPDATA%\\ghidra\\ghidra_12.1.4_PUBLIC\\Extensions\\GhidraMCP; python: %USERPROFILE%\\Tools\\ghidra-mcp-venv"
+python  = "mcp 1.30.0, requests 2.34.2, pyghidra 3.1.0 + jpype1 1.5.2 (from Ghidra's bundled wheels)"
+
+[python]
+capstone = "5.0.9"
+pefile   = "2024.8.26"
+
+[objdiff]
+version = "3.8.2"
+cli_sha256 = "36d229ac6ce74a26b47f42cf86ea8e808d8cd834a54aa62d7ed3f47b765d971b"
+gui_sha256 = "ce9d877a8cd6f133a962fb86d66f0348b9b88d735cea0fd52ae61bb9ad4d6691"
+source  = "github.com/encounter/objdiff releases"
+
+[vgmstream]
+version = "r2117"
+file    = "vgmstream-win64.zip"
+sha256  = "6c4a8a3813864fefed081bbd337dbc0ad93bf88e0b92f5db98d7ab258b22dc6c"
+source  = "github.com/vgmstream/vgmstream releases"
+
+[ffmpeg]
+version = "8.1.1"
+source  = "winget Gyan.FFmpeg (pre-installed)"
+
+[visual-studio]
+version = "Community 2026 (18.x), workload NativeDesktop"
+source  = "winget Microsoft.VisualStudio.Community"
+
+[cxbx-reloaded]
+version = "CI-585c49a (2026-04-19)"
+file    = "CxbxReloaded-Release.zip"
+sha256  = "010d1e85bee9f82f05ae57ca483e7ae61fecba06c1637bf6b5a74ca09b03bf43"
+source  = "github.com/Cxbx-Reloaded/Cxbx-Reloaded releases (CI builds are its only channel; no publisher hash, this is our own)"
+install = "%USERPROFILE%\\Tools\\cxbx-reloaded\\CI-585c49a"
+purpose = "ReWhacked Phase 2 reference check only; approved by user 2026-10-19"
+
+[period-compiler]
+# Optional insurance only; the project does not depend on it.
+version = "cl 13.00.9466 (VS .NET 2002), fallback cl 13.10.3077 (VS .NET 2003)"
+source  = "user-supplied retail copy, kept in git-ignored toolchain/"

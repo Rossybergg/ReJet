@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "ghidra": {
+      "command": "${USERPROFILE}\\Tools\\ghidra-mcp-venv\\Scripts\\ghidra-mcp.exe",
+      "args": [
+        "--headless",
+        "--binary", "orig\\Default.xbe",
+        "--project", "${USERPROFILE}\\GhidraProjects",
+        "--project-name", "rejet",
+        "--ghidra-install-dir", "${USERPROFILE}\\Tools\\ghidra_12.1.4_PUBLIC",
+        "--ready-timeout", "120"
+      ],
+      "env": {
+        "JAVA_HOME": "C:\\Program Files\\Microsoft\\jdk-21.0.12.101-hotspot"
+      }
+    }
+  }
+}

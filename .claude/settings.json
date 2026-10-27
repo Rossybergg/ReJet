@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(tools/oracle/**)",
+      "Write(tools/oracle/**)",
+      "Edit(toolchain/**)",
+      "Write(toolchain/**)",
+      "Edit(orig/**)",
+      "Write(orig/**)",
+      "Edit(config/xbe.sha1)",
+      "Write(config/xbe.sha1)",
+      "Edit(config/disc.sha1)",
+      "Write(config/disc.sha1)",
+      "Edit(.github/**)",
+      "Write(.github/**)",
+      "Edit(.claude/settings.json)",
+      "Write(.claude/settings.json)"
+    ]
+  }
+}

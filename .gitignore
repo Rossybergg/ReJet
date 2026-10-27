@@ -1,0 +1,28 @@
+# Game data and the period compiler never go in the repo.
+*.iso
+*.xbe
+orig/
+toolchain/
+
+# Ghidra project databases
+*.gpr
+*.rep/
+/ghidra/
+
+# Build output
+build/
+out/
+*.obj
+*.pdb
+*.ilk
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local machine overrides
+.claude/settings.local.json
+
+# Alpha builds (binaries, shared privately)
+/alpha/
