@@ -43,3 +43,12 @@
 - **Input:** pad poll `0x167C50` (pad vtable 0x1E94C8, slot 25), with rumble via `XInputSetState`.
 - **Sound:** DirectSound create `0x168F80`, per-frame work `0x169050`, 3D voice parameters `0x16DF00`; ADX fills its own buffers.
 - Next: Z: cache install, the camera, language and 50/60 Hz selection; then Phase 2 (copy and adapt the loader).
+
+## 2026-10-27 — Phase 1 complete: cache, language, 50/60 Hz, camera
+
+- **Console settings**, named from their setting IDs: XGetLanguage `0x147D8B`, XGetVideoFlags `0x147DE1`, XGetAudioFlags `0x147E2D`, XGetVideoStandard `0x147DB8`, XGetAVPack `0x147DB0`.
+- **Language:** the game language is at 0x258818 (0 Jpn, 1 Eng, 2 Frn, 3 Ger, 4 Spa, 5 Ita), set at start-up from XGetLanguage. A launcher option is the loader's answer to setting 7.
+- **50/60 Hz:** device creation picks 50 Hz only for PAL without the PAL60 flag, so the loader can default to 60 Hz by reporting PAL60. The effect on game and ADX speed is to be checked at runtime.
+- **Z: cache:** copy-on-read through `0x262E0`/`0x25910` (async, overlapped + unbuffered opens, write to `name~` then rename) and a background installer `0x25550` over 9 slots with `JSRF_CACHE_COMPLETE%02d.CMP` markers. The loader needs overlapped I/O and full sharing, and must not use host unbuffered I/O.
+- **Camera:** MMATRIX is a Sega-style matrix stack, with LookAt at `0x1BBA30`. Six camera classes (vtables 0x1CB800–0x1CBA90) each set the viewport, call SetProjection with their own angle (+0x74; near 1, far 5000) and call LookAt. These are the hooks for per-camera widescreen and modern camera controls. Which class is the gameplay camera is found at runtime.
+- Details are in `docs/SUBSYSTEMS.md`. **Phase 1 is done.** Next: Phase 2, copy and adapt ReWhacked's loader.

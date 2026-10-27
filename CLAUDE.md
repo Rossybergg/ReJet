@@ -23,7 +23,7 @@ A native Windows version of the original Xbox game **Jet Set Radio Future** (Smi
 - Middleware: **CRI ADX** audio (statically linked in `.text`: `adxm_*`, `cvFs*` strings) playing through DSOUND; 704 `.adx` files under `Media\Z_ADX`. No Bink, no Sofdec movie files on the disc.
 - Assets: `.dat`/`.bin` pairs, `.prs`, `.grf`, `.JTX`, per-player-count files `.1P`–`.4P` (local split screen exists), `Media\Cache\*.tbl` and a Z: cache (`Z:\Media\Cache\JSRF_CACHE_COMPLETE*.CMP`, `JSRF_FATAL.ERR`).
 - `.text` layout (`config/regions.csv`): game 0x11000–0x13B010 (x87), CRI ADX to 0x145FF0, XAPILIB to 0x14C25A, **engine libraries** to 0x17CA26 (SSE maths, D3D/DSOUND/XPP wrappers), CRT to 0x187430, EH funclets to the end. Game code never calls D3D/DSOUND directly: the engine layer does (356 D3D, 172 DSOUND call sites), so hook and shim there.
-- To verify, not assumed: whether logic is frame-locked (no delta timer found; see SUBSYSTEMS.md); PAL 50/60 Hz handling; how the cel shading and outlines are drawn; custom soundtrack (Xbox HDD music) use.
+- To verify, not assumed: whether logic is frame-locked (no delta timer found; see SUBSYSTEMS.md); game speed at 50 vs 60 Hz; how the cel shading and outlines are drawn; custom soundtrack (Xbox HDD music) use.
 
 ## Strategy: hybrid host, copied from ReWhacked (user decision 2026-10-27)
 Same plan as ReWhacked, which reached a fully playable game with enhancements in about 4 days of sessions. **Copy and adapt** ReWhacked's generic code into this repo (no shared library); the two projects stay independent. Modern Visual Studio (x86, 32-bit) builds everything; no byte matching.
@@ -51,4 +51,4 @@ Same plan as ReWhacked, which reached a fully playable game with enhancements in
 - `.claude/settings.json` denies agent edits to `tools/oracle/`, `toolchain/`, `orig/`, hash files, `.github/` and itself.
 
 ## Next step
-Phase 1 continued: inventory, census and the engine layer are mapped (`docs/SUBSYSTEMS.md`: renderer vtable 0x1E6BA0, video mode 640x480x16 with vsync, projection slot 31 for Hor+, ADX vblank thread, input and sound). Next: Z: cache install, the camera, language and PAL 50/60 Hz selection; then Phase 2 (copy and adapt ReWhacked's loader).
+Phase 1 is done (`docs/SUBSYSTEMS.md`: engine layer, video mode 640x480x16 with vsync, projection slot 31, ADX vblank thread, input, sound, console settings and language, 50/60 Hz, Z: copy-on-read cache, camera classes). Next: **Phase 2**: copy ReWhacked's `loader/`, replace its Whacked addresses with JSRF ones, drop `net/`, and boot to the first D3D call. Mind the cache's overlapped, unbuffered file I/O.
