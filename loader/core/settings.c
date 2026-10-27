@@ -7,6 +7,7 @@
 #include "settings.h"
 
 Settings g_settings = {
+    1280, 960, 100, 1,    /* display */
     GAME_LANG_ENGLISH, 1, /* console */
 };
 
@@ -33,8 +34,13 @@ void settings_load(void)
 
 #define GET(section, key, field, lo, hi) \
     s->field = clampi((int)GetPrivateProfileIntW(L##section, L##key, s->field, path), lo, hi)
+    GET("Display", "Width", width, 320, 7680);
+    GET("Display", "Height", height, 240, 4320);
+    GET("Display", "WindowScale", window_scale, 25, 400);
+    GET("Display", "VSync", vsync, 0, 1);
     GET("Console", "Language", language, GAME_LANG_JAPANESE, GAME_LANG_ITALIAN);
     GET("Console", "PAL60", pal60, 0, 1);
 #undef GET
-    log_printf("settings: language %d, %s\n", s->language, s->pal60 ? "PAL60 (60 Hz)" : "PAL 50 Hz");
+    log_printf("settings: %dx%d (window %d%%), vsync %d, language %d, %s\n", s->width, s->height, s->window_scale,
+               s->vsync, s->language, s->pal60 ? "PAL60 (60 Hz)" : "PAL 50 Hz");
 }

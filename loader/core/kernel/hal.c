@@ -80,13 +80,26 @@ ULONG XBAPI xbox_PhyGetLinkState(BOOLEAN Verify)
     return 0; /* no XNET_ETHERNET_LINK_ACTIVE: cable unplugged */
 }
 
+/* AV_QUERY_AV_CAPABILITIES (6): AV pack | video standard | refresh and HDTV flags. JSRF's XDK
+ * 4134 D3D (D3D_GetAdapterModeCount 0x19A2F0 / EnumAdapterModes) keeps only display modes whose
+ * refresh bits match, so an answer of 0 left no modes and the renderer gave up before creating
+ * a device. Report a PAL console on SCART, at 60 Hz with PAL60 (rejet.ini) or 50 Hz. */
+#define AV_QUERY_AV_CAPABILITIES 6
+#define AV_PACK_SCART            0x00000003
+#define AV_STANDARD_PAL_I        0x00000300
+#define AV_FLAGS_60HZ            0x00400000
+#define AV_FLAGS_50HZ            0x00800000
+
 VOID XBAPI xbox_AvSendTVEncoderOption(PVOID RegisterBase, ULONG Option, ULONG Param, PULONG Result)
 {
+    ULONG v = 0;
     (void)RegisterBase;
     (void)Param;
-    KTRACE("AvSendTVEncoderOption(%lu)\n", Option);
+    if (Option == AV_QUERY_AV_CAPABILITIES)
+        v = AV_PACK_SCART | AV_STANDARD_PAL_I | (g_settings.pal60 ? AV_FLAGS_60HZ : AV_FLAGS_50HZ);
+    KTRACE("AvSendTVEncoderOption(%lu) -> %08lX\n", Option, v);
     if (Result)
-        *Result = 0;
+        *Result = v;
 }
 
 /* All sections are mapped at load time, so loading/unloading only needs to succeed. */

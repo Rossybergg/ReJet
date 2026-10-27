@@ -12,7 +12,7 @@ add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # rejet.dll: all loader logic. x87 floating point for anything game-facing (CLAUDE.md).
-# Phase 2: boot path only. The D3D, DSOUND and XPP shims come over from ReWhacked in Phase 3.
+# D3D: milestone 1 (device, Clear, Swap, resources). XPP from ReWhacked; DSOUND comes next.
 add_library(rejet SHARED
   core/loader.c
   core/emu_thread.c
@@ -30,10 +30,12 @@ add_library(rejet SHARED
   core/kernel/ps.c
   core/kernel/rtl.c
   core/kernel/sync.c
-  core/kernel/xc.c)
+  core/kernel/xc.c
+  core/d3d/d3d.c
+  core/input/xpp.c)
 target_include_directories(rejet PRIVATE core ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 target_compile_options(rejet PRIVATE /W4 /arch:IA32)
-target_link_libraries(rejet PRIVATE shell32)
+target_link_libraries(rejet PRIVATE shell32 d3d9 xinput)
 target_link_options(rejet PRIVATE /LARGEADDRESSAWARE)
 
 # ReJetLoader.exe: tiny stub that owns 0x10000.. (see ReWhacked's docs/LOADER.md).

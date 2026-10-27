@@ -8,6 +8,10 @@
 enum { GAME_LANG_JAPANESE = 0, GAME_LANG_ENGLISH = 1, GAME_LANG_FRENCH = 2, GAME_LANG_GERMAN = 3, GAME_LANG_SPANISH = 4, GAME_LANG_ITALIAN = 5 };
 
 typedef struct Settings {
+    /* [Display] */
+    int width, height; /* render resolution (default 1280x960; the Xbox renders 640x480) */
+    int window_scale;  /* window size in percent of the render size (default 100) */
+    int vsync;         /* 1 = wait for the monitor's refresh when presenting */
     /* [Console] */
     int language;  /* GAME_LANG_* (default English) */
     int pal60;     /* 1 = report the PAL60 video flag so the game runs at 60 Hz (default); 0 = PAL 50 Hz */

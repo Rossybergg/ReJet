@@ -7,5 +7,11 @@ typedef struct HlePatch {
     const char *name;
 } HlePatch;
 
+/* Per-subsystem tables (d3d/d3d.c, ...). */
+extern const HlePatch g_d3d_patches[];
+extern const unsigned g_d3d_patch_count;
+extern const HlePatch g_input_patches[];
+extern const unsigned g_input_patch_count;
+
 /* Verifies the XBE file's SHA-1, then patches every table entry. Returns 0 on mismatch. */
 int hle_apply(const unsigned char *xbe_file, unsigned long xbe_size);

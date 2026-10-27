@@ -19,7 +19,7 @@ from capstone import x86
 
 ROOT = Path(__file__).resolve().parents[2]
 XBE = ROOT / "orig" / "Default.xbe"
-D3D_RAW, D3D_VA, D3D_SIZE = 0x226000, 0x235100, 0x20CFC
+D3D_RAW, D3D_VA, D3D_SIZE = 0x17E000, 0x18D600, 0xE6B0  # JSRF D3D section (raw size; the rest is BSS)
 
 REGS = {x86.X86_REG_EAX: "eax", x86.X86_REG_ECX: "ecx", x86.X86_REG_EDX: "edx",
         x86.X86_REG_AX: "eax", x86.X86_REG_AL: "eax", x86.X86_REG_CX: "ecx", x86.X86_REG_CL: "ecx",

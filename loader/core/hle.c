@@ -54,6 +54,27 @@ static const HlePatch g_time_patches[] = {
     {XDK_XAPILIB_SetThreadPriority, (void *)hle_SetThreadPriority, "XAPILIB::SetThreadPriority"},
 };
 
+/* --- Audio (DSOUND), until ReWhacked's mixer is ported --- */
+
+/* The original DirectSoundCreate programs the APU (registers at 0xFE800000), which a PC
+ * doesn't have. Until the software mixer comes over, report "no driver": the engine's sound
+ * object (0x168F80) then has no DirectSound and the rest of start-up can be tested. */
+#define DSERR_NODRIVER_X ((HRESULT)0x88780078L)
+
+static HRESULT XBAPI hle_DirectSoundCreate_none(const void *pGuid, void **ppDS, void *pUnkOuter)
+{
+    (void)pGuid;
+    (void)pUnkOuter;
+    if (ppDS)
+        *ppDS = NULL;
+    log_printf("audio: DirectSoundCreate -> no driver (DSOUND shim not ported yet)\n");
+    return DSERR_NODRIVER_X;
+}
+
+static const HlePatch g_audio_patches[] = {
+    {XDK_DSOUND_DirectSoundCreate, (void *)hle_DirectSoundCreate_none, "DSOUND::DirectSoundCreate"},
+};
+
 static unsigned patch_table(const HlePatch *t, unsigned count)
 {
     for (unsigned i = 0; i < count; i++) {
@@ -75,8 +96,11 @@ int hle_apply(const unsigned char *xbe_file, unsigned long xbe_size)
         log_printf("error: Default.xbe SHA-1 does not match config/xbe.sha1; HLE addresses would be wrong\n");
         return 0;
     }
-    /* D3D, DSOUND and XPP tables come back in Phase 3, each re-derived for XDK 4134. */
+    /* The DSOUND table comes back next, re-derived for XDK 4134 like D3D's and XPP's. */
     n += patch_table(g_time_patches, sizeof g_time_patches / sizeof g_time_patches[0]);
+    n += patch_table(g_d3d_patches, g_d3d_patch_count);
+    n += patch_table(g_input_patches, g_input_patch_count);
+    n += patch_table(g_audio_patches, sizeof g_audio_patches / sizeof g_audio_patches[0]);
     FlushInstructionCache(GetCurrentProcess(), NULL, 0);
     log_printf("hle: xbe hash ok, %u functions patched\n", n);
     return 1;
