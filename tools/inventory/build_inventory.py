@@ -6,7 +6,7 @@ Inputs (regenerate with `python tools/ghidra/export.py`):
     config/regions.csv        hand-maintained .text origin boundaries
 
 Outputs:
-    config/functions.csv      every function with an origin (game/xdk/crt/bink/wma)
+    config/functions.csv      every function with an origin (game/engine/adx/xdk/crt)
     config/xdk_census.csv     every non-game function game code calls, with call counts
     config/vtables.csv        candidate vtables with slot targets and writer (ctor/dtor) functions
     docs/XDK_CENSUS.md        summary by library (the shim worklist)
@@ -25,7 +25,7 @@ CONFIG = ROOT / "config"
 # Non-.text sections are whole libraries.
 SECTION_ORIGIN = {
     "XONLINE": "xdk", "XNET": "xdk", "D3D": "xdk", "XGRPH": "xdk", "DSOUND": "xdk",
-    "XPP": "xdk", "WMADEC": "wma", "EXTERNAL": "xdk",
+    "XPP": "xdk", "WMADEC": "wma", "EXTERNAL": "xdk", "MMATRIX": "xdk", "DOLBY": "xdk",
 }
 KERNEL_ORDINAL_BASE = 0x80000000
 
@@ -53,7 +53,7 @@ def library_of(name, section, origin):
         lib = name.split("::", 1)[0]
         return "xboxkrnl" if lib.lower().startswith("xboxkrnl") else lib
     if section == ".text":
-        return {"crt": "LIBCMT", "bink": "BINK", "xdk": "XAPILIB"}.get(origin, origin)
+        return {"crt": "LIBCMT", "bink": "BINK", "xdk": "XAPILIB", "adx": "CRI ADX", "engine": "engine libs"}.get(origin, origin)
     return "BINK" if section.startswith("BINK") else section
 
 

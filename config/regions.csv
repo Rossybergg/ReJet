@@ -1,0 +1,7 @@
+start,end,origin,note
+0x00011000,0x0013b010,game,game code (x87 floating point); boundary approximate: last large game function 0x13ADE0 ends before the ADX API entry points
+0x0013b010,0x00145ff0,adx,CRI ADX audio middleware (ADXT/ADXF/ADXB/adxm/cvFs strings referenced 0x13B960-0x1430A0); end = first XbSymbolDatabase XAPI hit
+0x00145ff0,0x0014c25a,xdk,XAPILIB in .text (QueryPerformanceCounter 0x145FF0; entry 0x148AD8 is XAPI startup); xboxkrnl jmp stubs end 0x14C25A
+0x0014c25a,0x0017ca26,engine,unnamed libraries linked after XAPI: SSE vector maths at 0x14C260 (about 1900 calls from game), then D3D-, XPP- and DSOUND-heavy blocks; probably Smilebit engine libraries
+0x0017ca26,0x00187430,crt,LIBCMT/LIBCPMT (EH runtime from 0x17CA26; FID names to RtlUnwind stub 0x1873EA)
+0x00187430,0x0018d600,game,end of .text: EH unwind funclets and static initialiser/atexit thunks (no direct callers) for game objects

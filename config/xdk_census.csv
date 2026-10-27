@@ -1,0 +1,176 @@
+library,callee,name,section,origin,call_sites,game_callers
+CRI ADX,0x0013b150,FUN_0013b150,.text,adx,19,12
+CRI ADX,0x0013b520,FUN_0013b520,.text,adx,9,5
+CRI ADX,0x0013b510,FUN_0013b510,.text,adx,7,4
+CRI ADX,0x0013b530,FUN_0013b530,.text,adx,7,4
+CRI ADX,0x0013b960,FUN_0013b960,.text,adx,7,4
+CRI ADX,0x0013b450,FUN_0013b450,.text,adx,6,1
+CRI ADX,0x0013b1c0,FUN_0013b1c0,.text,adx,5,1
+CRI ADX,0x0013b430,FUN_0013b430,.text,adx,5,1
+CRI ADX,0x0013b480,FUN_0013b480,.text,adx,4,1
+CRI ADX,0x0013b730,FUN_0013b730,.text,adx,2,1
+CRI ADX,0x0013b500,FUN_0013b500,.text,adx,1,1
+CRI ADX,0x0013b630,FUN_0013b630,.text,adx,1,1
+CRI ADX,0x0013b9d0,FUN_0013b9d0,.text,adx,1,1
+CRI ADX,0x0013ba40,FUN_0013ba40,.text,adx,1,1
+CRI ADX,0x0013ba50,FUN_0013ba50,.text,adx,1,1
+CRI ADX,0x0013ba60,FUN_0013ba60,.text,adx,1,1
+CRI ADX,0x0013baf0,FUN_0013baf0,.text,adx,1,1
+CRI ADX,0x0013bde0,FUN_0013bde0,.text,adx,1,1
+DSOUND,0x0019ef7c,FUN_0019ef7c,DSOUND,xdk,1,1
+DSOUND,0x0019ef9c,DSOUND::IDirectSound_Release,DSOUND,xdk,1,1
+LIBCMT,0x0017caaf,___CxxFrameHandler,.text,crt,459,459
+LIBCMT,0x0017ce88,FUN_0017ce88,.text,crt,423,143
+LIBCMT,0x0017cfdd,_atexit,.text,crt,28,27
+LIBCMT,0x0017d0bd,FUN_0017d0bd,.text,crt,28,11
+LIBCMT,0x0017cfef,FUN_0017cfef,.text,crt,14,8
+LIBCMT,0x0017d320,_strstr,.text,crt,12,2
+LIBCMT,0x0017d550,FUN_0017d550,.text,crt,5,5
+LIBCMT,0x0017d18b,_atol,.text,crt,2,2
+LIBCMT,0x0017d1e3,_atol,.text,crt,1,1
+LIBCMT,0x0017d460,__alldiv,.text,crt,1,1
+LIBCMT,0x0017d510,__allmul,.text,crt,1,1
+LIBCMT,0x0017d5c1,FUN_0017d5c1,.text,crt,1,1
+MMATRIX,0x001bb510,FUN_001bb510,MMATRIX,xdk,784,462
+MMATRIX,0x001bb560,FUN_001bb560,MMATRIX,xdk,536,349
+MMATRIX,0x001bb480,FUN_001bb480,MMATRIX,xdk,493,308
+MMATRIX,0x001bb5e0,FUN_001bb5e0,MMATRIX,xdk,448,246
+MMATRIX,0x001bbdf0,FUN_001bbdf0,MMATRIX,xdk,270,203
+MMATRIX,0x001bb4c0,FUN_001bb4c0,MMATRIX,xdk,268,211
+MMATRIX,0x001bbda0,FUN_001bbda0,MMATRIX,xdk,188,147
+MMATRIX,0x001bbe40,FUN_001bbe40,MMATRIX,xdk,166,131
+MMATRIX,0x001bb710,FUN_001bb710,MMATRIX,xdk,147,83
+MMATRIX,0x001bb6c0,FUN_001bb6c0,MMATRIX,xdk,121,88
+MMATRIX,0x001bb3b0,FUN_001bb3b0,MMATRIX,xdk,98,79
+MMATRIX,0x001bb410,FUN_001bb410,MMATRIX,xdk,77,52
+MMATRIX,0x001bbd30,FUN_001bbd30,MMATRIX,xdk,67,41
+MMATRIX,0x001bc130,FUN_001bc130,MMATRIX,xdk,57,25
+MMATRIX,0x001bbcf0,FUN_001bbcf0,MMATRIX,xdk,51,38
+MMATRIX,0x001bb5a0,FUN_001bb5a0,MMATRIX,xdk,49,26
+MMATRIX,0x001bc110,FUN_001bc110,MMATRIX,xdk,46,35
+MMATRIX,0x001bb520,FUN_001bb520,MMATRIX,xdk,44,22
+MMATRIX,0x001bb360,FUN_001bb360,MMATRIX,xdk,35,32
+MMATRIX,0x001bba30,FUN_001bba30,MMATRIX,xdk,30,30
+MMATRIX,0x001bb870,FUN_001bb870,MMATRIX,xdk,23,18
+MMATRIX,0x001bb730,FUN_001bb730,MMATRIX,xdk,20,16
+MMATRIX,0x001bc0f0,FUN_001bc0f0,MMATRIX,xdk,17,10
+MMATRIX,0x001bc0a0,FUN_001bc0a0,MMATRIX,xdk,16,14
+MMATRIX,0x001bbd70,FUN_001bbd70,MMATRIX,xdk,13,13
+MMATRIX,0x001bbf20,FUN_001bbf20,MMATRIX,xdk,12,11
+MMATRIX,0x001bbed0,FUN_001bbed0,MMATRIX,xdk,10,9
+MMATRIX,0x001bc480,FUN_001bc480,MMATRIX,xdk,8,7
+MMATRIX,0x001bc280,FUN_001bc280,MMATRIX,xdk,7,5
+MMATRIX,0x001bbe90,FUN_001bbe90,MMATRIX,xdk,6,4
+MMATRIX,0x001bc420,FUN_001bc420,MMATRIX,xdk,4,4
+MMATRIX,0x001bc460,FUN_001bc460,MMATRIX,xdk,4,3
+MMATRIX,0x001bbef0,FUN_001bbef0,MMATRIX,xdk,2,2
+MMATRIX,0x001bc440,FUN_001bc440,MMATRIX,xdk,2,2
+MMATRIX,0x001bb660,FUN_001bb660,MMATRIX,xdk,1,1
+MMATRIX,0x001bc150,FUN_001bc150,MMATRIX,xdk,1,1
+MMATRIX,0x001bc1e0,FUN_001bc1e0,MMATRIX,xdk,1,1
+MMATRIX,0x001bc210,FUN_001bc210,MMATRIX,xdk,1,1
+XAPILIB,0x001464ed,FUN_001464ed,.text,xdk,98,59
+XAPILIB,0x0014675b,FUN_0014675b,.text,xdk,90,47
+XAPILIB,0x00147677,FUN_00147677,.text,xdk,41,9
+XAPILIB,0x00146015,FUN_00146015,.text,xdk,40,23
+XAPILIB,0x00146a1b,FUN_00146a1b,.text,xdk,33,11
+XAPILIB,0x0014765d,FUN_0014765d,.text,xdk,29,9
+XAPILIB,0x001476d4,XAPILIB::XCalculateSignatureBegin,.text,xdk,29,9
+XAPILIB,0x001473d9,FUN_001473d9,.text,xdk,23,2
+XAPILIB,0x00146033,FUN_00146033,.text,xdk,22,20
+XAPILIB,0x00146b08,FUN_00146b08,.text,xdk,22,8
+XAPILIB,0x00147a37,FUN_00147a37,.text,xdk,11,11
+XAPILIB,0x00145ff0,XAPILIB::QueryPerformanceCounter,.text,xdk,10,8
+XAPILIB,0x00146814,FUN_00146814,.text,xdk,10,5
+XAPILIB,0x00146e56,FUN_00146e56,.text,xdk,10,9
+XAPILIB,0x001be0bf,XAPILIB::XGetDevices,XPP,xdk,9,9
+XAPILIB,0x001464bf,FUN_001464bf,.text,xdk,7,6
+XAPILIB,0x00146efe,FUN_00146efe,.text,xdk,5,5
+XAPILIB,0x00146cd8,FUN_00146cd8,.text,xdk,3,1
+XAPILIB,0x00147e96,XAPILIB::OutputDebugStringA,.text,xdk,3,2
+XAPILIB,0x00147fe7,XAPILIB::XLaunchNewImageA,.text,xdk,3,3
+XAPILIB,0x0014690e,FUN_0014690e,.text,xdk,2,2
+XAPILIB,0x00146da0,FUN_00146da0,.text,xdk,2,2
+XAPILIB,0x00146e91,XAPILIB::GetLastError,.text,xdk,2,2
+XAPILIB,0x0014733e,FUN_0014733e,.text,xdk,2,2
+XAPILIB,0x00148a08,XAPILIB::CreateThread,.text,xdk,2,2
+XAPILIB,0x001bf3ad,XAPILIB::XUnmountMU,XPP,xdk,2,2
+XAPILIB,0x00146001,FUN_00146001,.text,xdk,1,1
+XAPILIB,0x001464a0,FUN_001464a0,.text,xdk,1,1
+XAPILIB,0x00146736,FUN_00146736,.text,xdk,1,1
+XAPILIB,0x0014676e,FUN_0014676e,.text,xdk,1,1
+XAPILIB,0x00147c9a,FUN_00147c9a,.text,xdk,1,1
+XAPILIB,0x00147d8b,FUN_00147d8b,.text,xdk,1,1
+XAPILIB,0x00147db0,FUN_00147db0,.text,xdk,1,1
+XAPILIB,0x00147db8,FUN_00147db8,.text,xdk,1,1
+XAPILIB,0x00147de1,FUN_00147de1,.text,xdk,1,1
+XAPILIB,0x001486a1,FUN_001486a1,.text,xdk,1,1
+XAPILIB,0x00148903,XAPILIB::ExitThread,.text,xdk,1,1
+XAPILIB,0x001bf29e,XAPILIB::XMountMUA,XPP,xdk,1,1
+engine libs,0x0014d2c0,FUN_0014d2c0,.text,engine,144,75
+engine libs,0x0014cf80,FUN_0014cf80,.text,engine,128,94
+engine libs,0x0014cff0,FUN_0014cff0,.text,engine,125,64
+engine libs,0x0014d290,FUN_0014d290,.text,engine,122,75
+engine libs,0x0014d150,FUN_0014d150,.text,engine,121,49
+engine libs,0x0014ced0,FUN_0014ced0,.text,engine,118,81
+engine libs,0x0014d2b0,FUN_0014d2b0,.text,engine,114,50
+engine libs,0x0014d170,FUN_0014d170,.text,engine,69,49
+engine libs,0x0014d310,FUN_0014d310,.text,engine,65,17
+engine libs,0x0014c2c0,FUN_0014c2c0,.text,engine,58,18
+engine libs,0x0014cdc0,FUN_0014cdc0,.text,engine,57,24
+engine libs,0x0014ce00,FUN_0014ce00,.text,engine,53,22
+engine libs,0x0014d1f0,FUN_0014d1f0,.text,engine,53,36
+engine libs,0x0014cf20,FUN_0014cf20,.text,engine,52,40
+engine libs,0x0014ce70,FUN_0014ce70,.text,engine,45,34
+engine libs,0x0014c7c0,FUN_0014c7c0,.text,engine,43,22
+engine libs,0x0014d2e0,FUN_0014d2e0,.text,engine,43,34
+engine libs,0x0014ce30,FUN_0014ce30,.text,engine,42,28
+engine libs,0x0014d330,FUN_0014d330,.text,engine,39,15
+engine libs,0x0014d370,FUN_0014d370,.text,engine,39,20
+engine libs,0x0014c3d0,FUN_0014c3d0,.text,engine,38,15
+engine libs,0x0014d100,FUN_0014d100,.text,engine,35,20
+engine libs,0x0014cbc0,FUN_0014cbc0,.text,engine,31,14
+engine libs,0x0014d0e0,FUN_0014d0e0,.text,engine,31,17
+engine libs,0x0014c770,FUN_0014c770,.text,engine,30,13
+engine libs,0x0014c930,FUN_0014c930,.text,engine,24,12
+engine libs,0x0014c840,FUN_0014c840,.text,engine,22,16
+engine libs,0x0014c320,FUN_0014c320,.text,engine,20,7
+engine libs,0x0014d620,FUN_0014d620,.text,engine,20,17
+engine libs,0x0014d260,FUN_0014d260,.text,engine,16,12
+engine libs,0x0014d300,FUN_0014d300,.text,engine,15,8
+engine libs,0x0014d810,FUN_0014d810,.text,engine,15,13
+engine libs,0x0014cd70,FUN_0014cd70,.text,engine,12,5
+engine libs,0x0014d040,FUN_0014d040,.text,engine,12,9
+engine libs,0x0014cfc0,FUN_0014cfc0,.text,engine,11,10
+engine libs,0x0014c260,FUN_0014c260,.text,engine,10,9
+engine libs,0x0014c950,FUN_0014c950,.text,engine,8,6
+engine libs,0x0014d080,FUN_0014d080,.text,engine,8,6
+engine libs,0x0014d160,FUN_0014d160,.text,engine,7,3
+engine libs,0x0014d350,FUN_0014d350,.text,engine,5,3
+engine libs,0x0015fd70,FUN_0015fd70,.text,engine,4,2
+engine libs,0x0014cd10,FUN_0014cd10,.text,engine,3,1
+engine libs,0x0014d230,FUN_0014d230,.text,engine,3,2
+engine libs,0x0014d7b0,FUN_0014d7b0,.text,engine,3,3
+engine libs,0x0014cc80,FUN_0014cc80,.text,engine,2,1
+engine libs,0x0014cd60,FUN_0014cd60,.text,engine,2,2
+engine libs,0x0014cd90,FUN_0014cd90,.text,engine,2,1
+engine libs,0x0014d660,FUN_0014d660,.text,engine,2,2
+engine libs,0x0014d690,FUN_0014d690,.text,engine,2,1
+engine libs,0x0014d720,FUN_0014d720,.text,engine,2,2
+engine libs,0x0014d760,FUN_0014d760,.text,engine,2,2
+engine libs,0x0014d840,FUN_0014d840,.text,engine,2,1
+engine libs,0x0014d1b0,FUN_0014d1b0,.text,engine,1,1
+engine libs,0x0014d560,FUN_0014d560,.text,engine,1,1
+engine libs,0x0014d590,FUN_0014d590,.text,engine,1,1
+engine libs,0x0014d5b0,FUN_0014d5b0,.text,engine,1,1
+engine libs,0x0014d740,FUN_0014d740,.text,engine,1,1
+engine libs,0x0014d790,FUN_0014d790,.text,engine,1,1
+engine libs,0x0014da70,FUN_0014da70,.text,engine,1,1
+engine libs,0x00157850,FUN_00157850,.text,engine,1,1
+engine libs,0x0015fc90,FUN_0015fc90,.text,engine,1,1
+engine libs,0x00160480,FUN_00160480,.text,engine,1,1
+engine libs,0x001604b0,FUN_001604b0,.text,engine,1,1
+engine libs,0x001604c0,FUN_001604c0,.text,engine,1,1
+engine libs,0x001607f0,FUN_001607f0,.text,engine,1,1
+engine libs,0x00168bb0,FUN_00168bb0,.text,engine,1,1
+engine libs,0x00168c10,FUN_00168c10,.text,engine,1,1

@@ -22,6 +22,7 @@ A native Windows version of the original Xbox game **Jet Set Radio Future** (Smi
 - Only C++ RTTI for std exceptions; no PDB; almost no debug strings (no asserts, no source paths).
 - Middleware: **CRI ADX** audio (statically linked in `.text`: `adxm_*`, `cvFs*` strings) playing through DSOUND; 704 `.adx` files under `Media\Z_ADX`. No Bink, no Sofdec movie files on the disc.
 - Assets: `.dat`/`.bin` pairs, `.prs`, `.grf`, `.JTX`, per-player-count files `.1P`–`.4P` (local split screen exists), `Media\Cache\*.tbl` and a Z: cache (`Z:\Media\Cache\JSRF_CACHE_COMPLETE*.CMP`, `JSRF_FATAL.ERR`).
+- `.text` layout (`config/regions.csv`): game 0x11000–0x13B010 (x87), CRI ADX to 0x145FF0, XAPILIB to 0x14C25A, **engine libraries** to 0x17CA26 (SSE maths, D3D/DSOUND/XPP wrappers), CRT to 0x187430, EH funclets to the end. Game code never calls D3D/DSOUND directly: the engine layer does (356 D3D, 172 DSOUND call sites), so hook and shim there.
 - To verify, not assumed: frame rate and whether logic is frame-locked; PAL 50/60 Hz handling; how the cel shading and outlines are drawn; custom soundtrack (Xbox HDD music) use.
 
 ## Strategy: hybrid host, copied from ReWhacked (user decision 2026-10-27)
@@ -35,7 +36,7 @@ Same plan as ReWhacked, which reached a fully playable game with enhancements in
 6. **Phase 5+ – Optional** functional decomp of hot spots, then independence. Long term only.
 
 ## Modern-compiler cautions (from ReWhacked)
-- Build game-facing code `/arch:IA32` (x87); SSE2 changes rounding.
+- Build game-facing code `/arch:IA32` (x87); SSE2 changes rounding. Exception: JSRF's engine maths library is hand-written SSE, so rewrites there must keep SSE single-precision semantics.
 - Never use modern `std::` in structs shared with game code (4134-era LIBCPMT layouts).
 - cdecl/stdcall/thiscall/fastcall match; derive XDK calling conventions from the machine code (`tools/loader/d3d_abi.py`), since XDK D3D uses register conventions.
 
@@ -50,4 +51,4 @@ Same plan as ReWhacked, which reached a fully playable game with enhancements in
 - `.claude/settings.json` denies agent edits to `tools/oracle/`, `toolchain/`, `orig/`, hash files, `.github/` and itself.
 
 ## Next step
-Phase 1: `python tools/ghidra/export.py --fresh`, then write `config/regions.csv` for this XBE and run `tools/inventory/build_inventory.py`. Status in `docs/PROGRESS.md`.
+Phase 1 continued: inventory v1 and census are done (`docs/XDK_CENSUS.md`). Next: name the engine layer's entry points (renderer, sound, input) and locate video mode / present parameters, projection and viewport, controller poll, game timer and the Z: cache install; write findings to `docs/SUBSYSTEMS.md`. Status in `docs/PROGRESS.md`.
