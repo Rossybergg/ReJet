@@ -17,7 +17,7 @@ Requirements: Windows 10/11, Visual Studio 2026 with **Desktop development with 
 
 1. Build: `tools\loader\build.bat` (writes `build\loader\ReJetLoader.exe` and `rejet.dll`).
 2. Extract your disc: `python tools\xiso.py extract-all path\to\your.iso %USERPROFILE%\GameData\JSRF`.
-3. Run: `play.bat 0` (until you close the window). Play-testing keys (F10 marker, F11 bug capture, F12 screenshot) and how to report problems: [docs/TESTING.md](docs/TESTING.md).
+3. Run: `play.bat 0` (until you close the window). In the game, F1 (or Back + Start on a controller) opens the ReJet menu: settings and bug reports. Play-testing keys (F10 marker, F11 bug capture, F12 screenshot) and how to report problems: [docs/TESTING.md](docs/TESTING.md).
    `play.bat` alone runs 30 seconds. The log is `build\loader\loader.log`. Settings (`[Display] Width`, `Height`, `WindowScale`, `VSync`; `[Audio] Volume`, `MuteInBackground`; `[Console] Language`, `PAL60`) go in `rejet.ini` next to the loader.
 
 ## Repository layout

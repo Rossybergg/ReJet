@@ -8,9 +8,15 @@ How to play-test and report problems so they can be found and fixed quickly. Eve
 - Controller: an Xbox-style pad on port 1. Keyboard (when no pad is plugged in): WASD steer, Space or Z = A, X or Esc = B, C = X, V = Y, Q and E = triggers, Enter = Start, Backspace = Back, arrow keys = d-pad.
 - Saves are kept in `%LOCALAPPDATA%\rejet\hdd\Partition1\UDATA\49470018\` and survive restarts and rebuilds.
 
+## The ReJet menu
+
+Press **F1**, or **Back + Start** on any controller, to pause the game and open the ReJet menu. Move with the d-pad, left stick or arrow keys; A / Enter selects, B / Esc goes back, Start / F1 resumes. Settings (display, audio, language) are saved at once and kept for the next session; those marked * apply the next time ReJet starts.
+
+**Report a bug** in the menu is the easiest way to report a problem: pick what went wrong, optionally type a note, and save. It makes a bug capture (below) of the game screen with your note in `note.txt`.
+
 ## Keys for testing
 
-The window title lists them.
+The window title lists them. Each shows a short confirmation in the top left corner.
 
 | Key | What it does | Where it goes |
 |---|---|---|

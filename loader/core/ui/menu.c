@@ -1,0 +1,1034 @@
+/* The ReJet menu (see menu.h).
+ *
+ * Drawn with the game's own Direct3D 9Ex device at the end of each frame: a font atlas made
+ * with GDI at start-up (no outside libraries), coloured parallelograms for the JSRF look, all
+ * as pre-transformed quads in one texture. The device state is saved and restored around it
+ * with a state block, so the game's next draws are unaffected. While the menu is open the game
+ * thread stays inside Swap (the game is paused: no frames, no vblanks), and the menu redraws
+ * over a frozen copy of the last frame. Music keeps playing, quieter.
+ *
+ * Layout is designed on a 1280x960 canvas and scaled to the back buffer. */
+#define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
+#include <windows.h>
+#include <d3d9.h>
+#include <Xinput.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "kernel.h"
+#include "settings.h"
+#include "ui/menu.h"
+
+static MenuHost g_host;
+#define DEV ((IDirect3DDevice9Ex *)g_host.dev)
+
+/* ------------------------------------------------------------------ colours (ARGB) */
+
+#define C_LIME    0xFFC8F01Eu /* JSRF's yellow-green */
+#define C_PINK    0xFFFF2D8Au
+#define C_TEAL    0xFF19C8C8u
+#define C_WHITE   0xFFFFFFFFu
+#define C_GREY    0xFF9AA4A4u
+#define C_BLACK   0xFF000000u
+#define C_PANEL   0xE00A1A1Cu
+#define C_SHADE   0x99000000u
+
+static DWORD with_alpha(DWORD c, float a)
+{
+    DWORD ca = (DWORD)((float)(c >> 24) * (a < 0 ? 0 : a > 1 ? 1 : a));
+    return (c & 0x00FFFFFFu) | ca << 24;
+}
+
+/* ------------------------------------------------------------------ font atlas */
+
+enum { FONT_TITLE, FONT_ITEM, FONT_SMALL, FONT_COUNT };
+#define ATLAS 2048
+#define FIRST_CHAR 32
+#define LAST_CHAR 126
+
+typedef struct Glyph {
+    float u0, v0, u1, v1; /* atlas texture coordinates */
+    float w, h;           /* cell size in pixels */
+    float adv;            /* advance */
+} Glyph;
+
+static Glyph g_glyph[FONT_COUNT][LAST_CHAR - FIRST_CHAR + 1];
+static float g_font_px[FONT_COUNT]; /* line height in back-buffer pixels */
+static float g_white_u, g_white_v;  /* a white texel, for solid shapes */
+static IDirect3DTexture9 *g_atlas;
+static UINT g_bw, g_bh;             /* back-buffer size the atlas was built for */
+static float g_scale, g_ox;         /* canvas -> back buffer: x' = g_ox + x * g_scale */
+
+static int build_atlas(UINT bw, UINT bh)
+{
+    static const struct { const WCHAR *face; int size, weight, italic; } fonts[FONT_COUNT] = {
+        {L"Arial Black", 76, FW_HEAVY, 1},
+        {L"Arial Black", 34, FW_HEAVY, 1},
+        {L"Segoe UI", 24, FW_BOLD, 0},
+    };
+    HDC dc = CreateCompatibleDC(NULL);
+    BITMAPINFO bi;
+    DWORD *bits = NULL;
+    HBITMAP bm;
+    int x = 0, y = 0, row = 0;
+    D3DLOCKED_RECT lr;
+
+    if (g_atlas) {
+        IDirect3DTexture9_Release(g_atlas);
+        g_atlas = NULL;
+    }
+    g_bw = bw;
+    g_bh = bh;
+    g_scale = (float)bh / 960.0f;
+    if ((float)bw < 1280.0f * g_scale) /* narrower than 4:3: fit the width */
+        g_scale = (float)bw / 1280.0f;
+    g_ox = ((float)bw - 1280.0f * g_scale) * 0.5f;
+
+    memset(&bi, 0, sizeof bi);
+    bi.bmiHeader.biSize = sizeof bi.bmiHeader;
+    bi.bmiHeader.biWidth = ATLAS;
+    bi.bmiHeader.biHeight = -ATLAS;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bm = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+    if (!bm || !bits) {
+        DeleteDC(dc);
+        return 0;
+    }
+    SelectObject(dc, bm);
+    SetTextColor(dc, RGB(255, 255, 255));
+    SetBkMode(dc, TRANSPARENT);
+    for (int f = 0; f < FONT_COUNT; f++) {
+        int px = (int)((float)fonts[f].size * g_scale + 0.5f);
+        HFONT h = CreateFontW(-px, 0, 0, 0, fonts[f].weight, fonts[f].italic, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS,
+                              CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, fonts[f].face);
+        HGDIOBJ old = SelectObject(dc, h);
+        TEXTMETRICW tm;
+        int pad = fonts[f].italic ? px / 3 : 2; /* italic overhang */
+        GetTextMetricsW(dc, &tm);
+        g_font_px[f] = (float)tm.tmHeight;
+        for (int c = FIRST_CHAR; c <= LAST_CHAR; c++) {
+            WCHAR wc = (WCHAR)c;
+            SIZE sz;
+            int cw;
+            Glyph *g = &g_glyph[f][c - FIRST_CHAR];
+            GetTextExtentPoint32W(dc, &wc, 1, &sz);
+            cw = sz.cx + pad + 2;
+            if (x + cw > ATLAS) {
+                x = 0;
+                y += row + 2;
+                row = 0;
+            }
+            if (y + tm.tmHeight > ATLAS - 8)
+                break;
+            TextOutW(dc, x + 1, y, &wc, 1);
+            g->u0 = (float)x / ATLAS;
+            g->v0 = (float)y / ATLAS;
+            g->u1 = (float)(x + cw) / ATLAS;
+            g->v1 = (float)(y + tm.tmHeight) / ATLAS;
+            g->w = (float)cw;
+            g->h = (float)tm.tmHeight;
+            g->adv = (float)sz.cx;
+            x += cw + 2;
+            if (tm.tmHeight > row)
+                row = tm.tmHeight;
+        }
+        SelectObject(dc, old);
+        DeleteObject(h);
+    }
+    GdiFlush();
+    /* a white block in the bottom-right corner for solid fills */
+    for (int j = ATLAS - 6; j < ATLAS; j++)
+        for (int i = ATLAS - 6; i < ATLAS; i++)
+            bits[j * ATLAS + i] = 0x00FFFFFFu;
+    g_white_u = (ATLAS - 3.0f) / ATLAS;
+    g_white_v = (ATLAS - 3.0f) / ATLAS;
+
+    if (SUCCEEDED(IDirect3DDevice9Ex_CreateTexture(DEV, ATLAS, ATLAS, 1, D3DUSAGE_DYNAMIC, D3DFMT_A8R8G8B8,
+                                                   D3DPOOL_DEFAULT, &g_atlas, NULL)) &&
+        SUCCEEDED(IDirect3DTexture9_LockRect(g_atlas, 0, &lr, NULL, D3DLOCK_DISCARD))) {
+        for (int j = 0; j < ATLAS; j++) {
+            DWORD *dst = (DWORD *)((BYTE *)lr.pBits + (size_t)j * lr.Pitch);
+            const DWORD *src = bits + (size_t)j * ATLAS;
+            for (int i = 0; i < ATLAS; i++) /* coverage (grey text) -> alpha on white */
+                dst[i] = (src[i] & 0xFF) << 24 | 0x00FFFFFFu;
+        }
+        IDirect3DTexture9_UnlockRect(g_atlas, 0);
+    }
+    DeleteObject(bm);
+    DeleteDC(dc);
+    return g_atlas != NULL;
+}
+
+/* ------------------------------------------------------------------ drawing */
+
+typedef struct Vertex {
+    float x, y, z, rhw;
+    DWORD c;
+    float u, v;
+} Vertex;
+#define FVF (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1)
+#define MAX_VERTS 24576
+static Vertex g_v[MAX_VERTS];
+static int g_nv;
+static IDirect3DStateBlock9 *g_state;
+static float g_fade = 1.0f; /* menu opening animation */
+
+static float X(float x) { return g_ox + x * g_scale; }
+static float Y(float y) { return y * g_scale; }
+
+/* A quad in back-buffer pixels; `skew` shifts the top edge right (parallelograms). */
+static void quad_px(float x0, float y0, float x1, float y1, float skew, DWORD c, float u0, float v0, float u1, float v1)
+{
+    Vertex *v = g_v + g_nv;
+    if (g_nv + 6 > MAX_VERTS)
+        return;
+    x0 -= 0.5f; x1 -= 0.5f; y0 -= 0.5f; y1 -= 0.5f;
+    v[0] = (Vertex){x0 + skew, y0, 0, 1, c, u0, v0};
+    v[1] = (Vertex){x1 + skew, y0, 0, 1, c, u1, v0};
+    v[2] = (Vertex){x0, y1, 0, 1, c, u0, v1};
+    v[3] = v[1];
+    v[4] = (Vertex){x1, y1, 0, 1, c, u1, v1};
+    v[5] = v[2];
+    g_nv += 6;
+}
+
+/* A solid parallelogram on the canvas. */
+static void box(float x0, float y0, float x1, float y1, float skew, DWORD c)
+{
+    quad_px(X(x0), Y(y0), X(x1), Y(y1), skew * g_scale, with_alpha(c, g_fade), g_white_u, g_white_v, g_white_u,
+            g_white_v);
+}
+
+static float text_width(int font, const char *s)
+{
+    float w = 0;
+    for (; *s; s++)
+        if ((unsigned char)*s >= FIRST_CHAR && (unsigned char)*s <= LAST_CHAR)
+            w += g_glyph[font][(unsigned char)*s - FIRST_CHAR].adv;
+    return w / g_scale; /* canvas units */
+}
+
+/* Text on the canvas at (x, y) = top left; align 0 left, 1 centre, 2 right. Drop shadow. */
+static void text(int font, float x, float y, int align, DWORD c, const char *s)
+{
+    float px, py = Y(y), w = text_width(font, s);
+    if (align == 1)
+        x -= w * 0.5f;
+    else if (align == 2)
+        x -= w;
+    for (int pass = 0; pass < 2; pass++) {
+        DWORD col = pass ? with_alpha(c, g_fade) : with_alpha(0xC0000000u, (float)(c >> 24) / 255.0f * g_fade);
+        float off = pass ? 0.0f : (font == FONT_SMALL ? 1.0f : 2.5f) * g_scale;
+        px = X(x);
+        for (const char *p = s; *p; p++) {
+            unsigned ch = (unsigned char)*p;
+            const Glyph *g;
+            if (ch < FIRST_CHAR || ch > LAST_CHAR)
+                continue;
+            g = &g_glyph[font][ch - FIRST_CHAR];
+            if (ch != ' ')
+                quad_px(px + off, py + off, px + off + g->w, py + off + g->h, 0, col, g->u0, g->v0, g->u1, g->v1);
+            px += g->adv;
+        }
+    }
+}
+
+static void flush(void)
+{
+    IDirect3DSurface9 *bb = NULL, *old_rt = NULL;
+    D3DVIEWPORT9 vp = {0, 0, g_bw, g_bh, 0.0f, 1.0f};
+    if (!g_nv || !g_atlas)
+        return;
+    if (!g_state && FAILED(IDirect3DDevice9Ex_CreateStateBlock(DEV, D3DSBT_ALL, &g_state)))
+        return;
+    IDirect3DStateBlock9_Capture(g_state);
+    IDirect3DDevice9Ex_GetRenderTarget(DEV, 0, &old_rt);
+    IDirect3DDevice9Ex_GetBackBuffer(DEV, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb);
+    IDirect3DDevice9Ex_SetRenderTarget(DEV, 0, bb);
+    IDirect3DDevice9Ex_SetViewport(DEV, &vp);
+    IDirect3DDevice9Ex_SetVertexShader(DEV, NULL);
+    IDirect3DDevice9Ex_SetPixelShader(DEV, NULL);
+    IDirect3DDevice9Ex_SetFVF(DEV, FVF);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_ZENABLE, D3DZB_FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_ZWRITEENABLE, FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_STENCILENABLE, FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_SCISSORTESTENABLE, FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_ALPHATESTENABLE, FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_ALPHABLENDENABLE, TRUE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_CULLMODE, D3DCULL_NONE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_LIGHTING, FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_FOGENABLE, FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_FILLMODE, D3DFILL_SOLID);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_COLORWRITEENABLE, 0xF);
+    IDirect3DDevice9Ex_SetTexture(DEV, 0, (IDirect3DBaseTexture9 *)g_atlas);
+    IDirect3DDevice9Ex_SetTexture(DEV, 1, NULL);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_TEXCOORDINDEX, 0);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+    IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+    IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+    IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+    IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_SRGBTEXTURE, FALSE);
+    IDirect3DDevice9Ex_BeginScene(DEV);
+    IDirect3DDevice9Ex_DrawPrimitiveUP(DEV, D3DPT_TRIANGLELIST, (UINT)g_nv / 3, g_v, sizeof(Vertex));
+    IDirect3DDevice9Ex_EndScene(DEV);
+    g_nv = 0;
+    IDirect3DStateBlock9_Apply(g_state);
+    IDirect3DDevice9Ex_SetRenderTarget(DEV, 0, old_rt);
+    if (old_rt)
+        IDirect3DSurface9_Release(old_rt);
+    if (bb)
+        IDirect3DSurface9_Release(bb);
+}
+
+/* Make sure the atlas matches the back buffer. */
+static int ready(void)
+{
+    IDirect3DSurface9 *bb = NULL;
+    D3DSURFACE_DESC d;
+    if (!DEV)
+        return 0;
+    if (FAILED(IDirect3DDevice9Ex_GetBackBuffer(DEV, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)))
+        return 0;
+    IDirect3DSurface9_GetDesc(bb, &d);
+    IDirect3DSurface9_Release(bb);
+    if (!g_atlas || d.Width != g_bw || d.Height != g_bh)
+        build_atlas(d.Width, d.Height);
+    return g_atlas != NULL;
+}
+
+/* ------------------------------------------------------------------ messages and counter */
+
+#define MAX_TOASTS 4
+static CRITICAL_SECTION g_toast_lock;
+static struct { char text[96]; ULONGLONG at; } g_toasts[MAX_TOASTS];
+static int g_ntoasts;
+
+void menu_toast(const char *fmt, ...)
+{
+    va_list ap;
+    if (!g_host.dev)
+        return;
+    EnterCriticalSection(&g_toast_lock);
+    if (g_ntoasts == MAX_TOASTS) {
+        memmove(g_toasts, g_toasts + 1, sizeof g_toasts[0] * (MAX_TOASTS - 1));
+        g_ntoasts--;
+    }
+    va_start(ap, fmt);
+    vsnprintf(g_toasts[g_ntoasts].text, sizeof g_toasts[0].text, fmt, ap);
+    va_end(ap);
+    g_toasts[g_ntoasts].at = GetTickCount64();
+    g_ntoasts++;
+    LeaveCriticalSection(&g_toast_lock);
+}
+
+static void draw_toasts(void)
+{
+    ULONGLONG now = GetTickCount64();
+    float y = g_settings.show_fps ? 70.0f : 24.0f;
+    EnterCriticalSection(&g_toast_lock);
+    while (g_ntoasts && now - g_toasts[0].at > 3000) {
+        memmove(g_toasts, g_toasts + 1, sizeof g_toasts[0] * (MAX_TOASTS - 1));
+        g_ntoasts--;
+    }
+    for (int i = 0; i < g_ntoasts; i++) {
+        float age = (float)(now - g_toasts[i].at), a = age < 150 ? age / 150 : age > 2500 ? (3000 - age) / 500 : 1;
+        float w = text_width(FONT_SMALL, g_toasts[i].text);
+        float saved = g_fade;
+        g_fade = a;
+        box(24, y, 24 + w + 44, y + 40, 10, C_PANEL);
+        box(24, y, 32, y + 40, 10, C_LIME);
+        text(FONT_SMALL, 46, y + 6, 0, C_WHITE, g_toasts[i].text);
+        g_fade = saved;
+        y += 48;
+    }
+    LeaveCriticalSection(&g_toast_lock);
+}
+
+static void draw_fps(void)
+{
+    static LARGE_INTEGER last, freq;
+    static float fps;
+    static int frames;
+    static ULONGLONG since;
+    char s[32];
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (!freq.QuadPart) {
+        QueryPerformanceFrequency(&freq);
+        since = GetTickCount64();
+    }
+    frames++;
+    if (GetTickCount64() - since >= 500) { /* average over half a second */
+        fps = (float)frames * (float)freq.QuadPart / (float)(now.QuadPart - last.QuadPart);
+        frames = 0;
+        since = GetTickCount64();
+        last = now;
+    }
+    else if (!last.QuadPart)
+        last = now;
+    if (!g_settings.show_fps)
+        return;
+    snprintf(s, sizeof s, "%.0f FPS", fps);
+    box(24, 18, 24 + text_width(FONT_SMALL, s) + 32, 56, 10, C_PANEL);
+    text(FONT_SMALL, 40, 24, 0, fps >= 58.5f ? C_LIME : C_PINK, s);
+}
+
+/* ------------------------------------------------------------------ input */
+
+enum { IN_NONE, IN_UP, IN_DOWN, IN_LEFT, IN_RIGHT, IN_OK, IN_BACK, IN_CLOSE, IN_CHAR, IN_ERASE };
+
+#define MAX_EVENTS 64
+static CRITICAL_SECTION g_event_lock;
+static struct { int type; char ch; } g_events[MAX_EVENTS];
+static int g_nevents;
+static volatile LONG g_open_request; /* F1 */
+static volatile LONG g_open;         /* the menu is showing */
+static volatile LONG g_swallow;      /* after closing: hide controllers until released */
+static int g_text_focus;             /* the bug-report note has the keyboard */
+
+static void push_event(int type, char ch)
+{
+    EnterCriticalSection(&g_event_lock);
+    if (g_nevents < MAX_EVENTS) {
+        g_events[g_nevents].type = type;
+        g_events[g_nevents].ch = ch;
+        g_nevents++;
+    }
+    LeaveCriticalSection(&g_event_lock);
+}
+
+int menu_window_message(UINT msg, WPARAM wp)
+{
+    if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wp == VK_F1) {
+        if (g_open)
+            push_event(IN_CLOSE, 0);
+        else
+            InterlockedExchange(&g_open_request, 1);
+        return 1;
+    }
+    if (!g_open)
+        return 0;
+    if (msg == WM_KEYDOWN) {
+        switch (wp) {
+        case VK_UP: push_event(IN_UP, 0); return 1;
+        case VK_DOWN: push_event(IN_DOWN, 0); return 1;
+        case VK_LEFT: push_event(IN_LEFT, 0); return 1;
+        case VK_RIGHT: push_event(IN_RIGHT, 0); return 1;
+        case VK_RETURN: push_event(IN_OK, 0); return 1;
+        case VK_ESCAPE: push_event(IN_BACK, 0); return 1;
+        case VK_BACK: push_event(g_text_focus ? IN_ERASE : IN_BACK, 0); return 1;
+        case VK_SPACE:
+            if (!g_text_focus)
+                push_event(IN_OK, 0);
+            return 1;
+        default: return 1;
+        }
+    }
+    if (msg == WM_CHAR) {
+        if (g_text_focus && wp >= 32 && wp < 127)
+            push_event(IN_CHAR, (char)wp);
+        return 1;
+    }
+    return msg == WM_KEYUP || msg == WM_SYSKEYDOWN;
+}
+
+int menu_is_open(void)
+{
+    return g_open != 0;
+}
+
+/* Controllers, read directly from the host: Back + Start opens the menu from any controller;
+ * inside, the d-pad or left stick moves (with repeat), A selects, B goes back, Start closes. */
+static WORD g_pad_prev[4];
+static int g_pad_dir_prev[4];
+static ULONGLONG g_repeat_at[4];
+
+static WORD pad_buttons(DWORD port, int *dir)
+{
+    XINPUT_STATE s;
+    WORD b;
+    *dir = IN_NONE;
+    if (XInputGetState(port, &s) != ERROR_SUCCESS)
+        return 0;
+    b = s.Gamepad.wButtons;
+    if ((b & XINPUT_GAMEPAD_DPAD_UP) || s.Gamepad.sThumbLY > 16000)
+        *dir = IN_UP;
+    else if ((b & XINPUT_GAMEPAD_DPAD_DOWN) || s.Gamepad.sThumbLY < -16000)
+        *dir = IN_DOWN;
+    else if ((b & XINPUT_GAMEPAD_DPAD_LEFT) || s.Gamepad.sThumbLX < -16000)
+        *dir = IN_LEFT;
+    else if ((b & XINPUT_GAMEPAD_DPAD_RIGHT) || s.Gamepad.sThumbLX > 16000)
+        *dir = IN_RIGHT;
+    return b;
+}
+
+static int any_input_held(void)
+{
+    static const int keys[] = {VK_RETURN, VK_ESCAPE, VK_SPACE, VK_BACK, VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, 'Z', 'X', VK_F1};
+    for (DWORD p = 0; p < 4; p++) {
+        int dir;
+        if (pad_buttons(p, &dir) & ~0x0Fu || dir != IN_NONE)
+            return 1;
+    }
+    for (unsigned i = 0; i < sizeof keys / sizeof keys[0]; i++)
+        if (GetAsyncKeyState(keys[i]) & 0x8000)
+            return 1;
+    return 0;
+}
+
+static void poll_pads(void)
+{
+    ULONGLONG now = GetTickCount64();
+    for (DWORD p = 0; p < 4; p++) {
+        int dir;
+        WORD b = pad_buttons(p, &dir), pressed = (WORD)(b & ~g_pad_prev[p]);
+        if (pressed & XINPUT_GAMEPAD_A)
+            push_event(IN_OK, 0);
+        if (pressed & XINPUT_GAMEPAD_B)
+            push_event(IN_BACK, 0);
+        if (pressed & XINPUT_GAMEPAD_START)
+            push_event(IN_CLOSE, 0);
+        if (dir != IN_NONE && (dir != g_pad_dir_prev[p] || now >= g_repeat_at[p])) {
+            push_event(dir, 0);
+            g_repeat_at[p] = now + (dir != g_pad_dir_prev[p] ? 400 : 110);
+        }
+        g_pad_dir_prev[p] = dir;
+        g_pad_prev[p] = b;
+    }
+}
+
+/* Back + Start on any controller (checked every frame while the game runs). */
+static int pad_open_combo(void)
+{
+    int open = 0;
+    for (DWORD p = 0; p < 4; p++) {
+        int dir;
+        WORD b = pad_buttons(p, &dir);
+        WORD both = XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_START;
+        if ((b & both) == both && (g_pad_prev[p] & both) != both)
+            open = 1;
+        g_pad_prev[p] = b;
+        g_pad_dir_prev[p] = dir;
+    }
+    return open;
+}
+
+int menu_filter_pad(unsigned port, unsigned short *buttons)
+{
+    (void)port;
+    if (g_open || g_swallow)
+        return 1;
+    if (*buttons & 0x20) /* Back held: Start belongs to the menu */
+        *buttons &= (unsigned short)~0x10;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ pages */
+
+enum { PAGE_MAIN, PAGE_DISPLAY, PAGE_AUDIO, PAGE_GAME, PAGE_CONTROLS, PAGE_REPORT, PAGE_QUIT, PAGE_COUNT };
+enum { IT_ACTION, IT_CHOICE, IT_TOGGLE, IT_SLIDER, IT_TEXT, IT_INFO };
+
+typedef struct Item {
+    int type;
+    const char *label;
+    int *value;            /* choice index / toggle / slider value */
+    const char *const *choices;
+    int nchoices;
+    int restart;           /* applies on the next start */
+    int target;            /* action: page to open, or -1 */
+    void (*changed)(void); /* after a change */
+    const char *help;
+} Item;
+
+static int g_page, g_sel[PAGE_COUNT];
+static int g_stack[8], g_depth;
+
+/* Choice lists and the indices the menu edits (synced with g_settings). */
+static const int RES[][2] = {{640, 480}, {960, 720}, {1280, 960}, {1440, 1080}, {1600, 1200},
+                             {1920, 1440}, {2560, 1920}, {2880, 2160}};
+static const char *const RES_NAMES[] = {"640 x 480", "960 x 720", "1280 x 960", "1440 x 1080", "1600 x 1200",
+                                        "1920 x 1440", "2560 x 1920", "2880 x 2160"};
+static const int SCALES[] = {50, 75, 100, 125, 150, 200};
+static const char *const SCALE_NAMES[] = {"50%", "75%", "100%", "125%", "150%", "200%"};
+static const int ANISO[] = {1, 2, 4, 8, 16};
+static const char *const ANISO_NAMES[] = {"Original", "2x", "4x", "8x", "16x"};
+static const char *const LANG_NAMES[] = {"Japanese", "English", "French", "German", "Spanish", "Italian"};
+static const char *const REPORT_KINDS[] = {"Graphics", "Audio", "Controls", "Gameplay", "Crash or freeze",
+                                           "Slow or stutter", "Other"};
+static const char *const ONOFF[] = {"Off", "On"};
+
+static int g_res_i, g_scale_i, g_aniso_i, g_kind_i;
+static char g_note[160];
+
+static int index_of(const int *list, int n, int v)
+{
+    for (int i = 0; i < n; i++)
+        if (list[i] == v)
+            return i;
+    return 0;
+}
+
+static void sync_from_settings(void)
+{
+    g_res_i = 2;
+    for (int i = 0; i < (int)(sizeof RES / sizeof RES[0]); i++)
+        if (RES[i][0] == g_settings.width && RES[i][1] == g_settings.height)
+            g_res_i = i;
+    g_scale_i = index_of(SCALES, 6, g_settings.window_scale);
+    g_aniso_i = index_of(ANISO, 5, g_settings.anisotropy);
+}
+
+static void changed_res(void)
+{
+    g_settings.width = RES[g_res_i][0];
+    g_settings.height = RES[g_res_i][1];
+    settings_save();
+}
+static void changed_window(void)
+{
+    g_settings.window_scale = SCALES[g_scale_i];
+    settings_save();
+    if (g_host.apply_window)
+        g_host.apply_window();
+}
+static void changed_aniso(void)
+{
+    g_settings.anisotropy = ANISO[g_aniso_i];
+    settings_save();
+}
+static void changed_save(void) { settings_save(); }
+
+static void report_save(void);
+static void quit_now(void);
+
+#define ACTION(label, page, fn, help) {IT_ACTION, label, NULL, NULL, 0, 0, page, fn, help}
+#define CHOICE(label, var, list, restart, fn, help) \
+    {IT_CHOICE, label, &var, list, (int)(sizeof list / sizeof list[0]), restart, -1, fn, help}
+#define TOGGLE(label, var, restart, fn, help) {IT_TOGGLE, label, &var, ONOFF, 2, restart, -1, fn, help}
+#define INFO(label, value) {IT_INFO, label, NULL, NULL, 0, 0, -1, NULL, value}
+
+static const char *const PAGE_TITLE[PAGE_COUNT] = {"PAUSED", "DISPLAY", "AUDIO", "GAME", "CONTROLS", "REPORT A BUG",
+                                                   "QUIT"};
+
+static Item g_main[] = {
+    ACTION("Resume", -1, NULL, "Back to the game."),
+    ACTION("Report a bug", PAGE_REPORT, NULL, "Save a capture of this moment with a note, for the developers."),
+    ACTION("Display", PAGE_DISPLAY, NULL, "Resolution, window, texture filtering, frame-rate counter."),
+    ACTION("Audio", PAGE_AUDIO, NULL, "Volume."),
+    ACTION("Game", PAGE_GAME, NULL, "Language."),
+    ACTION("Controls", PAGE_CONTROLS, NULL, "Controller and keyboard layout."),
+    ACTION("Quit ReJet", PAGE_QUIT, NULL, "Close the game. Save in the game first."),
+};
+static Item g_display[] = {
+    CHOICE("Resolution", g_res_i, RES_NAMES, 1, changed_res, "Render resolution (the Xbox drew 640 x 480)."),
+    CHOICE("Window size", g_scale_i, SCALE_NAMES, 0, changed_window, "Window size, relative to the resolution."),
+    TOGGLE("Full screen", g_settings.fullscreen, 0, NULL, "Borderless window over the whole monitor."),
+    CHOICE("Texture filtering", g_aniso_i, ANISO_NAMES, 0, changed_aniso, "Sharper textures at an angle."),
+    TOGGLE("Show FPS", g_settings.show_fps, 0, changed_save, "Frame-rate counter in the top left corner."),
+    TOGGLE("VSync", g_settings.vsync, 1, changed_save,
+           "Also wait for the monitor. Off is smoother: the game already runs at 60."),
+};
+static Item g_audio[] = {
+    {IT_SLIDER, "Volume", &g_settings.volume, NULL, 0, 0, -1, changed_save, "Master volume."},
+    TOGGLE("Mute in background", g_settings.mute_in_background, 0, changed_save,
+           "Silent while another program has the focus."),
+};
+static Item g_game[] = {
+    CHOICE("Language", g_settings.language, LANG_NAMES, 1, changed_save, "Text and voice language."),
+};
+static Item g_controls[] = {
+    INFO("ReJet menu", "F1, or Back + Start"),
+    INFO("Move", "Left stick / WASD"),
+    INFO("Jump (A)", "A / Space or Z"),
+    INFO("Boost, spray (B)", "B / X"),
+    INFO("X / Y", "X, Y / C, V"),
+    INFO("Triggers", "LT, RT / Q, E"),
+    INFO("Start, Back", "Start, Back / Enter, Backspace"),
+    INFO("D-pad", "D-pad / arrow keys"),
+    INFO("Screenshot, capture, marker", "F12, F11, F10"),
+};
+static Item g_report[] = {
+    CHOICE("What went wrong", g_kind_i, REPORT_KINDS, 0, NULL, "Pick the closest."),
+    {IT_TEXT, "Note", NULL, NULL, 0, 0, -1, NULL, "Optional: type what happened (keyboard)."},
+    ACTION("Save report", -1, report_save, "Saves a capture of the game screen with your note."),
+    ACTION("Cancel", -2, NULL, NULL),
+};
+static Item g_quit[] = {
+    ACTION("No, keep playing", -2, NULL, NULL),
+    ACTION("Yes, quit", -1, quit_now, "Unsaved progress is lost."),
+};
+
+static Item *page_items(int page, int *n)
+{
+    switch (page) {
+#define P(arr) *n = (int)(sizeof arr / sizeof arr[0]); return arr
+    case PAGE_MAIN: P(g_main);
+    case PAGE_DISPLAY: P(g_display);
+    case PAGE_AUDIO: P(g_audio);
+    case PAGE_GAME: P(g_game);
+    case PAGE_CONTROLS: P(g_controls);
+    case PAGE_REPORT: P(g_report);
+    default: P(g_quit);
+#undef P
+    }
+}
+
+static void go_back(void)
+{
+    if (g_depth)
+        g_page = g_stack[--g_depth];
+    else {
+        log_printf("menu: back from the main page\n");
+        InterlockedExchange(&g_open, 0);
+    }
+}
+
+static void report_save(void)
+{
+    char note[256];
+    snprintf(note, sizeof note, "%s: %s", REPORT_KINDS[g_kind_i], g_note[0] ? g_note : "(no note)");
+    if (g_host.request_capture)
+        g_host.request_capture(note);
+    log_printf("menu: bug report: %s\n", note);
+    g_note[0] = 0;
+    g_kind_i = 0;
+}
+
+static void quit_now(void)
+{
+    log_printf("menu: quit\n");
+    settings_save();
+    PostMessageW(g_host.wnd, WM_CLOSE, 0, 0);
+}
+
+static void apply_full_screen(void)
+{
+    settings_save();
+    if (g_host.apply_window)
+        g_host.apply_window();
+}
+
+static void handle(int ev, char ch)
+{
+    int n;
+    Item *items = page_items(g_page, &n), *it;
+    int *sel = &g_sel[g_page];
+    if (*sel >= n)
+        *sel = 0;
+    it = &items[*sel];
+    switch (ev) {
+    case IN_UP:
+    case IN_DOWN:
+        do /* skip nothing: every row is selectable, info rows included (they scroll the help) */
+            *sel = (*sel + (ev == IN_UP ? n - 1 : 1)) % n;
+        while (0);
+        break;
+    case IN_LEFT:
+    case IN_RIGHT: {
+        int d = ev == IN_LEFT ? -1 : 1;
+        if (it->type == IT_CHOICE || it->type == IT_TOGGLE) {
+            *it->value = (*it->value + d + it->nchoices) % it->nchoices;
+            if (it->value == &g_settings.fullscreen)
+                apply_full_screen();
+            else if (it->changed)
+                it->changed();
+        }
+        else if (it->type == IT_SLIDER) {
+            int v = *it->value + d * 10;
+            *it->value = v < 0 ? 0 : v > 100 ? 100 : v;
+            if (it->changed)
+                it->changed();
+        }
+        break;
+    }
+    case IN_OK:
+        if (it->type == IT_ACTION) {
+            if (it->changed)
+                it->changed();
+            if (it->target == -1) /* close the menu */
+                InterlockedExchange(&g_open, 0);
+            else if (it->target == -2)
+                go_back();
+            else if (g_depth < 8) {
+                g_stack[g_depth++] = g_page;
+                g_page = it->target;
+                g_sel[g_page] = 0;
+            }
+        }
+        else if (it->type == IT_TOGGLE || it->type == IT_CHOICE)
+            handle(IN_RIGHT, 0);
+        else if (it->type == IT_TEXT)
+            handle(IN_DOWN, 0);
+        break;
+    case IN_BACK:
+        go_back();
+        break;
+    case IN_CLOSE:
+        log_printf("menu: close (Start / F1)\n");
+        InterlockedExchange(&g_open, 0);
+        break;
+    case IN_CHAR:
+        if (it->type == IT_TEXT && strlen(g_note) + 1 < sizeof g_note) {
+            size_t l = strlen(g_note);
+            g_note[l] = ch;
+            g_note[l + 1] = 0;
+        }
+        break;
+    case IN_ERASE:
+        if (it->type == IT_TEXT && g_note[0])
+            g_note[strlen(g_note) - 1] = 0;
+        break;
+    }
+    items = page_items(g_page, &n);
+    g_text_focus = g_open && items[g_sel[g_page] < n ? g_sel[g_page] : 0].type == IT_TEXT;
+}
+
+/* ------------------------------------------------------------------ menu drawing */
+
+static IDirect3DTexture9 *g_frozen; /* the last game frame, behind the menu */
+
+static void draw_frozen(void)
+{
+    if (!g_frozen)
+        return;
+    {
+        DWORD c = 0xFF5A6464u; /* darkened */
+        Vertex *v = g_v + g_nv;
+        float w = (float)g_bw - 0.5f, h = (float)g_bh - 0.5f;
+        /* drawn with its own texture before the menu's batch */
+        v[0] = (Vertex){-0.5f, -0.5f, 0, 1, c, 0, 0};
+        v[1] = (Vertex){w, -0.5f, 0, 1, c, 1, 0};
+        v[2] = (Vertex){-0.5f, h, 0, 1, c, 0, 1};
+        v[3] = v[1];
+        v[4] = (Vertex){w, h, 0, 1, c, 1, 1};
+        v[5] = v[2];
+        IDirect3DDevice9Ex_SetTexture(DEV, 0, (IDirect3DBaseTexture9 *)g_frozen);
+        IDirect3DDevice9Ex_SetFVF(DEV, FVF);
+        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_ALPHABLENDENABLE, FALSE);
+        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_ZENABLE, D3DZB_FALSE);
+        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_STENCILENABLE, FALSE);
+        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_SCISSORTESTENABLE, FALSE);
+        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_CULLMODE, D3DCULL_NONE);
+        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_LIGHTING, FALSE);
+        IDirect3DDevice9Ex_SetVertexShader(DEV, NULL);
+        IDirect3DDevice9Ex_SetPixelShader(DEV, NULL);
+        IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+        IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+        IDirect3DDevice9Ex_SetTextureStageState(DEV, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        IDirect3DDevice9Ex_BeginScene(DEV);
+        IDirect3DDevice9Ex_DrawPrimitiveUP(DEV, D3DPT_TRIANGLELIST, 2, v, sizeof(Vertex));
+        IDirect3DDevice9Ex_EndScene(DEV);
+    }
+}
+
+static void draw_menu(void)
+{
+    int n;
+    Item *items = page_items(g_page, &n);
+    int sel = g_sel[g_page] < n ? g_sel[g_page] : 0;
+    float y0 = 250, row = 62;
+    ULONGLONG t = GetTickCount64();
+    int restart_note = 0;
+
+    /* title strip */
+    box(-40, 70, 700, 190, 40, C_LIME);
+    box(-40, 182, 640, 196, 40, C_PINK);
+    text(FONT_TITLE, 70, 82, 0, C_BLACK, "ReJet");
+    text(FONT_ITEM, 360, 116, 0, C_BLACK, PAGE_TITLE[g_page]);
+
+    /* the list panel */
+    box(90, y0 - 26, 1210, y0 + row * n + 14, 24, C_PANEL);
+    for (int i = 0; i < n; i++) {
+        const Item *it = &items[i];
+        float y = y0 + row * i;
+        int on = i == sel;
+        DWORD fg = on ? C_BLACK : (it->type == IT_INFO ? C_GREY : C_WHITE);
+        char val[200] = "";
+        if (on) {
+            float pulse = 0.85f + 0.15f * (float)((t / 8) % 100) / 100.0f;
+            box(110, y - 6, 1190, y + row - 14, 14, with_alpha(C_LIME, pulse));
+            box(110, y - 6, 122, y + row - 14, 14, C_PINK);
+        }
+        text(FONT_ITEM, 140, y, 0, fg, it->label);
+        switch (it->type) {
+        case IT_CHOICE:
+        case IT_TOGGLE:
+            snprintf(val, sizeof val, on ? "<  %s%s  >" : "%s%s", it->choices[*it->value], it->restart ? " *" : "");
+            break;
+        case IT_SLIDER: {
+            float x0 = 820, x1 = 1110, f = (float)*it->value / 100.0f;
+            box(x0, y + 14, x1, y + 30, 6, on ? 0x66000000u : 0x55FFFFFFu);
+            box(x0, y + 14, x0 + (x1 - x0) * f, y + 30, 6, on ? C_BLACK : C_TEAL);
+            snprintf(val, sizeof val, "%d", *it->value);
+            text(FONT_SMALL, 1170, y + 6, 2, fg, val);
+            val[0] = 0;
+            break;
+        }
+        case IT_TEXT:
+            snprintf(val, sizeof val, "%s%s", g_note[0] ? g_note : (on ? "" : "(optional)"),
+                     on && (t / 500) % 2 ? "_" : "");
+            break;
+        case IT_INFO:
+            snprintf(val, sizeof val, "%s", it->help);
+            break;
+        }
+        if (it->restart)
+            restart_note = 1;
+        if (val[0]) {
+            int font = it->type == IT_TEXT || it->type == IT_INFO ? FONT_SMALL : FONT_ITEM;
+            float maxw = it->type == IT_TEXT ? 760.0f : 600.0f, w = text_width(font, val);
+            const char *v = val;
+            while (w > maxw && *v) /* long notes: show the end */
+                w -= text_width(font, (char[]){*v++, 0});
+            text(font, 1170, y + (font == FONT_SMALL ? 6 : 0), 2, fg, v);
+        }
+    }
+
+    /* help line for the selected row, and the footer */
+    {
+        const Item *it = &items[sel];
+        float y = y0 + row * n + 34;
+        if (it->help && it->type != IT_INFO)
+            text(FONT_SMALL, 110, y, 0, C_WHITE, it->help);
+        if (restart_note)
+            text(FONT_SMALL, 110, y + 34, 0, C_GREY, "* applies the next time ReJet starts");
+    }
+    box(-40, 880, 1320, 930, 0, C_SHADE);
+    text(FONT_SMALL, 640, 891, 1, C_WHITE,
+         g_text_focus ? "Type your note   Enter / Down  next   Esc  back"
+                      : "A / Enter  select     B / Esc  back     Left / Right  change     Start / F1  resume");
+}
+
+/* ------------------------------------------------------------------ the loop */
+
+static void freeze_frame(void)
+{
+    IDirect3DSurface9 *bb = NULL, *dst = NULL;
+    if (g_frozen) {
+        IDirect3DTexture9_Release(g_frozen);
+        g_frozen = NULL;
+    }
+    if (FAILED(IDirect3DDevice9Ex_CreateTexture(DEV, g_bw, g_bh, 1, D3DUSAGE_RENDERTARGET, D3DFMT_X8R8G8B8,
+                                                D3DPOOL_DEFAULT, &g_frozen, NULL)))
+        return;
+    IDirect3DDevice9Ex_GetBackBuffer(DEV, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb);
+    IDirect3DTexture9_GetSurfaceLevel(g_frozen, 0, &dst);
+    if (bb && dst)
+        IDirect3DDevice9Ex_StretchRect(DEV, bb, NULL, dst, NULL, D3DTEXF_NONE);
+    if (dst)
+        IDirect3DSurface9_Release(dst);
+    if (bb)
+        IDirect3DSurface9_Release(bb);
+}
+
+static void run_menu(void)
+{
+    ULONGLONG opened = GetTickCount64();
+    log_printf("menu: opened\n");
+    sync_from_settings();
+    freeze_frame();
+    g_page = PAGE_MAIN;
+    g_depth = 0;
+    g_sel[PAGE_MAIN] = 0;
+    EnterCriticalSection(&g_event_lock);
+    g_nevents = 0;
+    LeaveCriticalSection(&g_event_lock);
+    for (DWORD p = 0; p < 4; p++) { /* the buttons that opened it don't count */
+        int dir;
+        g_pad_prev[p] = pad_buttons(p, &dir);
+        g_pad_dir_prev[p] = dir;
+        g_repeat_at[p] = GetTickCount64() + 400;
+    }
+    InterlockedExchange(&g_open, 1);
+    while (g_open) {
+        IDirect3DStateBlock9 *saved = NULL;
+        poll_pads();
+        for (;;) {
+            int ev;
+            char ch;
+            EnterCriticalSection(&g_event_lock);
+            if (!g_nevents) {
+                LeaveCriticalSection(&g_event_lock);
+                break;
+            }
+            ev = g_events[0].type;
+            ch = g_events[0].ch;
+            memmove(g_events, g_events + 1, sizeof g_events[0] * (size_t)--g_nevents);
+            LeaveCriticalSection(&g_event_lock);
+            handle(ev, ch);
+            if (!g_open)
+                break;
+        }
+        if (!g_open)
+            break;
+        ready();
+        g_fade = (float)(GetTickCount64() - opened) / 120.0f;
+        if (g_fade > 1)
+            g_fade = 1;
+        if (SUCCEEDED(IDirect3DDevice9Ex_CreateStateBlock(DEV, D3DSBT_ALL, &saved))) {
+            draw_frozen();
+            IDirect3DStateBlock9_Apply(saved);
+            IDirect3DStateBlock9_Release(saved);
+        }
+        draw_menu();
+        draw_toasts();
+        flush();
+        g_host.present();
+        Sleep(16);
+    }
+    g_text_focus = 0;
+    if (g_frozen) {
+        IDirect3DTexture9_Release(g_frozen);
+        g_frozen = NULL;
+    }
+    InterlockedExchange(&g_swallow, 1);
+    log_printf("menu: closed\n");
+}
+
+void menu_frame(void)
+{
+    if (!DEV || !ready())
+        return;
+    if (g_swallow && !any_input_held())
+        InterlockedExchange(&g_swallow, 0);
+    {
+        int key = InterlockedExchange(&g_open_request, 0) != 0, pad = pad_open_combo();
+        if (key || pad) {
+            log_printf("menu: open (%s)\n", key ? "F1" : "Back + Start");
+            run_menu();
+        }
+    }
+    draw_fps();
+    draw_toasts();
+    flush();
+}
+
+void menu_init(const MenuHost *host)
+{
+    static int once;
+    if (!once) {
+        InitializeCriticalSection(&g_toast_lock);
+        InitializeCriticalSection(&g_event_lock);
+        once = 1;
+    }
+    g_host = *host;
+    sync_from_settings();
+    menu_toast("ReJet menu: F1, or Back + Start on a controller");
+}

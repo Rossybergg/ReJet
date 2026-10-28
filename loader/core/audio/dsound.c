@@ -31,6 +31,7 @@
 #include "hle.h"
 #include "kernel.h"
 #include "settings.h"
+#include "ui/menu.h"
 #include "xboxkrnl_impl.h"
 #include "xdk_addrs.gen.h"
 
@@ -181,18 +182,20 @@ static float mb_to_amp(LONG mb)
     return (float)pow(10.0, (double)mb / 2000.0);
 }
 
-/* Master volume: REJET_VOLUME=<percent> or the settings (default 100). */
+/* Master volume: REJET_VOLUME=<percent>, or the settings (default 100), read every time so the
+ * ReJet menu changes it live; lowered while the menu is open. */
 static float master_volume(void)
 {
-    static float m = -1.0f;
-    if (m < 0.0f) {
+    static float env_m = -2.0f;
+    float m;
+    if (env_m == -2.0f) {
         char env[16] = "";
-        m = GetEnvironmentVariableA("REJET_VOLUME", env, sizeof env) ? (float)atoi(env) / 100.0f
-                                                                      : (float)g_settings.volume / 100.0f;
-        if (m < 0.0f)
-            m = 0.0f;
+        env_m = GetEnvironmentVariableA("REJET_VOLUME", env, sizeof env) ? (float)atoi(env) / 100.0f : -1.0f;
     }
-    return m;
+    m = env_m >= 0.0f ? env_m : (float)g_settings.volume / 100.0f;
+    if (menu_is_open())
+        m *= 0.35f;
+    return m < 0.0f ? 0.0f : m;
 }
 
 static float voice_amp(const Voice *v)

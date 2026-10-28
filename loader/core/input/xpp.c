@@ -18,6 +18,7 @@
 
 #include "hle.h"
 #include "kernel.h"
+#include "ui/menu.h"
 #include "xboxkrnl_impl.h"
 #include "xdk_addrs.gen.h"
 
@@ -318,6 +319,8 @@ static DWORD XBAPI hle_XInputGetState(HANDLE h, XB_INPUT_STATE *pState)
     XB_GAMEPAD g;
     if (!p || !read_port((DWORD)(p - g_ports), &g))
         return ERROR_DEVICE_NOT_CONNECTED;
+    if (menu_filter_pad((unsigned)(p - g_ports), &g.wButtons)) /* ReJet menu open, or just closed */
+        memset(&g, 0, sizeof g);
     if (memcmp(&g, &p->last, sizeof g)) {
         p->packet++;
         p->last = g;

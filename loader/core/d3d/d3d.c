@@ -29,6 +29,7 @@
 #include "psh.h"
 #include "settings.h"
 #include "tex.h"
+#include "ui/menu.h"
 #include "vsh.h"
 #include "xbox/xbox_d3d.h"
 #include "xboxkrnl_impl.h"
@@ -72,6 +73,11 @@ static ULONG g_capture_frame = 0xFFFFFFFF; /* frame being captured */
 static char g_capture_dir[MAX_PATH];
 static FILE *g_capture_log;
 static const struct RenderTarget *g_cur_rt; /* the current render target, NULL = the back buffer */
+static char g_capture_note[256];             /* bug report from the ReJet menu, for the next capture */
+static CRITICAL_SECTION g_capture_note_lock;
+
+static void present(void);
+static void request_capture(const char *note);
 
 /* Log the first call of each not-yet-implemented entry point. */
 #define TODO_ONCE(name)                                                     \
@@ -105,6 +111,8 @@ static LRESULT CALLBACK wnd_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         InterlockedIncrement(&g_mark_request);
         return 0;
     }
+    if (menu_window_message(m, wp))
+        return 0;
     return DefWindowProcW(w, m, wp, lp);
 }
 
@@ -132,7 +140,8 @@ static DWORD WINAPI window_thread(void *arg)
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH); /* letterbox bars */
     RegisterClassExW(&wc);
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
-    g_wnd = CreateWindowW(L"rejet", L"Jet Set Radio Future (ReJet)  -  F10 mark   F11 capture   F12 screenshot", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT,
+    g_wnd = CreateWindowW(L"rejet", L"Jet Set Radio Future (ReJet)  -  F1 menu   F10 mark   F11 capture   F12 screenshot",
+                          WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT,
                           CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, NULL, NULL, wc.hInstance, NULL);
     SetEvent(req->ready);
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
@@ -140,6 +149,55 @@ static DWORD WINAPI window_thread(void *arg)
         DispatchMessageW(&msg);
     }
     return 0;
+}
+
+/* Window size or full screen changed (ReJet menu, or at start-up): a borderless window over the
+ * monitor, or a normal window of the render size times the window scale, centred. */
+static UINT window_dpi(void)
+{
+    typedef UINT(WINAPI * GetDpiForWindowFn)(HWND);
+    GetDpiForWindowFn fn = (GetDpiForWindowFn)(void *)GetProcAddress(GetModuleHandleW(L"user32"), "GetDpiForWindow");
+    UINT dpi = fn && g_wnd ? fn(g_wnd) : 96;
+    return dpi ? dpi : 96;
+}
+
+static void apply_window(void)
+{
+    HMONITOR mon = MonitorFromWindow(g_wnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = {sizeof mi};
+    UINT dpi = window_dpi();
+    GetMonitorInfoW(mon, &mi);
+    if (g_settings.fullscreen) {
+        SetWindowLongW(g_wnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(g_wnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
+                     mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    }
+    else {
+        /* the window scale is in Windows' scaled pixels (100% = the render size at 100% display scaling) */
+        RECT r = {0, 0, (LONG)((LONGLONG)g_hw * g_settings.window_scale * dpi / 9600),
+                  (LONG)((LONGLONG)g_hh * g_settings.window_scale * dpi / 9600)};
+        LONG ww, wh;
+        AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+        ww = r.right - r.left;
+        wh = r.bottom - r.top;
+        SetWindowLongW(g_wnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+        SetWindowPos(g_wnd, HWND_NOTOPMOST, (mi.rcWork.left + mi.rcWork.right - ww) / 2,
+                     (mi.rcWork.top + mi.rcWork.bottom - wh) / 2 > mi.rcWork.top
+                         ? (mi.rcWork.top + mi.rcWork.bottom - wh) / 2
+                         : mi.rcWork.top,
+                     ww, wh, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    }
+}
+
+/* ReJet draws its own pixels at any resolution: tell Windows, so it doesn't enlarge (and blur)
+ * the window on scaled displays. Before any window exists. */
+static void become_dpi_aware(void)
+{
+    typedef BOOL(WINAPI * SetDpiContextFn)(HANDLE);
+    SetDpiContextFn fn =
+        (SetDpiContextFn)(void *)GetProcAddress(GetModuleHandleW(L"user32"), "SetProcessDpiAwarenessContext");
+    if (fn && !fn((HANDLE)-4 /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 */))
+        log_printf("d3d: could not make the process DPI aware (%lu)\n", GetLastError());
 }
 
 static void create_window(int width, int height)
@@ -207,6 +265,7 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
     g_hh = (UINT)g_settings.height;
     g_sx = (float)g_hw / (float)g_xw;
     g_sy = (float)g_hh / (float)g_xh;
+    become_dpi_aware();
     create_window((int)g_hw * g_settings.window_scale / 100, (int)g_hh * g_settings.window_scale / 100);
 
     if (FAILED(Direct3DCreate9Ex(D3D_SDK_VERSION, &g_d3d))) {
@@ -274,6 +333,11 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
     /* no widescreen squeeze yet: 2D programs keep their x scale */
     g_vconst[VSH_C_2D][0] = g_vconst[VSH_C_2D][1] = g_vconst[VSH_C_2D][2] = g_vconst[VSH_C_2D][3] = 1.0f;
     log_printf("d3d: Direct3D 9Ex device ready, window %p\n", (void *)g_wnd);
+    {
+        MenuHost host = {(struct IDirect3DDevice9Ex *)g_dev, g_wnd, present, request_capture, apply_window};
+        menu_init(&host);
+    }
+    apply_window(); /* full screen, or the window sized for the display scaling */
     return S_OK;
 }
 
@@ -355,9 +419,10 @@ static BOOL CALLBACK vblank_init(PINIT_ONCE once, PVOID param, PVOID *ctx)
     (void)param;
     (void)ctx;
     InitializeCriticalSection(&g_vblank_lock);
+    InitializeCriticalSection(&g_capture_note_lock);
     QueryPerformanceFrequency(&g_qpf);
     QueryPerformanceCounter(&g_vblank_start);
-    g_vblank_hz = g_settings.pal60 ? 60 : 50;
+    g_vblank_hz = 60; /* always PAL60 (kernel/hal.c) */
     return TRUE;
 }
 
@@ -431,9 +496,15 @@ static void present(void)
 {
     RECT c, d;
     LONG cw, ch, w, h;
+    static LONG last_cw, last_ch;
     GetClientRect(g_wnd, &c);
     cw = c.right - c.left;
     ch = c.bottom - c.top;
+    if (cw != last_cw || ch != last_ch) { /* resized: repaint the bars around the picture black */
+        last_cw = cw;
+        last_ch = ch;
+        InvalidateRect(g_wnd, NULL, TRUE);
+    }
     if (cw <= 0 || ch <= 0) {
         IDirect3DDevice9Ex_PresentEx(g_dev, NULL, NULL, NULL, NULL, 0);
         return;
@@ -510,6 +581,7 @@ static void testing_hotkeys(void)
     while (marks_done < marks) {
         marks_done++;
         log_printf("==================== MARK %ld at frame %lu ====================\n", marks_done, g_frame);
+        menu_toast("Marker %ld written to the log", marks_done);
     }
     if (g_capture_log && g_frame == g_capture_frame) { /* the captured frame just ended */
         capture_finish();
@@ -534,7 +606,29 @@ static void testing_hotkeys(void)
         g_capture_frame = g_frame + 1;
         log_printf("==================== CAPTURE %s (frame %lu) ====================\n", g_capture_dir,
                    g_capture_frame);
+        EnterCriticalSection(&g_capture_note_lock);
+        if (g_capture_note[0]) { /* a bug report from the ReJet menu */
+            FILE *f;
+            snprintf(path, sizeof path, "%s\\note.txt", g_capture_dir);
+            if ((f = fopen(path, "w")) != NULL) {
+                fprintf(f, "%s\nframe %lu, %04u-%02u-%02u %02u:%02u:%02u\n", g_capture_note, g_capture_frame, t.wYear,
+                        t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+                fclose(f);
+            }
+            log_printf("note: %s\n", g_capture_note);
+            g_capture_note[0] = 0;
+        }
+        LeaveCriticalSection(&g_capture_note_lock);
     }
+}
+
+/* ReJet menu: "Report a bug" captures the next frame with the player's note. */
+static void request_capture(const char *note)
+{
+    EnterCriticalSection(&g_capture_note_lock);
+    snprintf(g_capture_note, sizeof g_capture_note, "%s", note);
+    LeaveCriticalSection(&g_capture_note_lock);
+    InterlockedExchange(&g_capture_request, 1);
 }
 
 /* F12: Screenshots\jsrf_<date>_<time>.bmp next to the loader. REJET_SHOTS=<n> (debugging):
@@ -553,6 +647,7 @@ static void maybe_screenshot(void)
                  t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
         save_backbuffer(name);
         log_printf("d3d: screenshot %s\n", name);
+        menu_toast("Screenshot saved");
     }
     if (every < 0) {
         char env[8] = "";
@@ -581,8 +676,10 @@ static DWORD XBAPI hle_D3DDevice_Swap(DWORD Flags)
     }
     maybe_screenshot();
     testing_hotkeys(); /* before Present: the back buffer still holds this frame */
-    if (g_dev)
+    if (g_dev) {
+        menu_frame(); /* messages and FPS on top; runs the menu (game paused) when opened */
         present();
+    }
     perf_end(PERF_PRESENT, t0);
     tex_new_frame();
     g_frame++;
@@ -1343,11 +1440,17 @@ static void apply_texture_stages(void)
         IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_ADDRESSV, xbox_address(t[1]));
         IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_ADDRESSW, xbox_address(t[2]));
         IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MAGFILTER, xbox_filter(t[3]));
-        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MINFILTER, xbox_filter(t[4]));
+        if (g_settings.anisotropy > 1 && xbox_filter(t[4]) == D3DTEXF_LINEAR) { /* ReJet menu: texture filtering */
+            IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
+            IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MAXANISOTROPY, (DWORD)g_settings.anisotropy);
+        }
+        else
+            IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MINFILTER, xbox_filter(t[4]));
         IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MIPFILTER, xbox_filter(t[5]));
         IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MIPMAPLODBIAS, t[6]);
         IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MAXMIPLEVEL, t[7]);
-        IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MAXANISOTROPY, t[8] ? t[8] : 1);
+        if (g_settings.anisotropy <= 1 || xbox_filter(t[4]) != D3DTEXF_LINEAR)
+            IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_MAXANISOTROPY, t[8] ? t[8] : 1);
         IDirect3DDevice9Ex_SetSamplerState(g_dev, s, D3DSAMP_BORDERCOLOR, t[29]);
         IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_COLOROP, xbox_top(t[12]));
         IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_COLORARG0, t[13]);
@@ -1565,6 +1668,10 @@ static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, X
                    (void *)pNewZStencil, pNewZStencil == &g_depth ? " (depth)" : "",
                    (unsigned)(UINT_PTR)_ReturnAddress());
     }
+    if (pRenderTarget && g_capture_log && g_frame == g_capture_frame)
+        fprintf(g_capture_log, "target: %s, Xbox data %08X, depth %s (from %08X)\n",
+                pRenderTarget == &g_backbuffer ? "back buffer" : "texture", pRenderTarget->Container.Resource.Data,
+                pNewZStencil ? "yes" : "none", (unsigned)(UINT_PTR)_ReturnAddress());
     if (!g_dev || !pRenderTarget)
         return S_OK;
     if (pRenderTarget == &g_backbuffer) {
@@ -1619,6 +1726,7 @@ static void capture_finish(void)
         fclose(f);
     }
     log_printf("==================== CAPTURE done: %s ====================\n", g_capture_dir);
+    menu_toast("Bug capture saved: %s", strrchr(g_capture_dir, '\\') ? strrchr(g_capture_dir, '\\') + 1 : g_capture_dir);
     g_capture_frame = 0xFFFFFFFF;
 }
 
@@ -1641,6 +1749,10 @@ static HRESULT XBAPI hle_D3DDevice_CopyRects(XD3DSurface *pSrc, const RECT *pSrc
                    pSrcRects ? pSrcRects->left : 0, pSrcRects ? pSrcRects->top : 0, pSrcRects ? pSrcRects->right : 0,
                    pSrcRects ? pSrcRects->bottom : 0, (unsigned)(UINT_PTR)_ReturnAddress());
     }
+    if (pSrc && pDst && g_capture_log && g_frame == g_capture_frame)
+        fprintf(g_capture_log, "copyrects: %08X%s -> %08X%s, %u rects (from %08X)\n", pSrc->Container.Resource.Data,
+                pSrc == &g_backbuffer ? " (back buffer)" : "", pDst->Container.Resource.Data,
+                pDst == &g_backbuffer ? " (back buffer)" : "", cRects, (unsigned)(UINT_PTR)_ReturnAddress());
     if (!g_dev || !pSrc || !pDst)
         return S_OK;
     if (pSrc == &g_backbuffer) {

@@ -8,8 +8,8 @@
 #include "settings.h"
 #include "xboxkrnl_impl.h"
 
-/* Console settings (EEPROM). A PAL console (our disc is PAL): language and PAL60 from rejet.ini
- * (default English, 60 Hz), Europe region, no parental lock.
+/* Console settings (EEPROM). A PAL console (our disc is PAL): language from rejet.ini (default
+ * English), always PAL60 (60 Hz; 50 Hz is never wanted), Europe region, no parental lock.
  * Index values are the kernel's setting numbers as observed in our XBE's XAPI callers. */
 #define XC_TIMEZONEBIAS        0x002
 #define XC_LANGUAGE            0x007
@@ -31,7 +31,7 @@ NTSTATUS XBAPI xbox_ExQueryNonVolatileSetting(ULONG ValueIndex, PULONG Type, PVO
     ULONG v = 0;
     switch (ValueIndex) {
     case XC_LANGUAGE: v = xbox_language[g_settings.language]; break;
-    case XC_VIDEO_FLAGS: v = g_settings.pal60 ? XC_VIDEO_FLAGS_PAL60 : 0; break;
+    case XC_VIDEO_FLAGS: v = XC_VIDEO_FLAGS_PAL60; break;
     case XC_FACTORY_AV_REGION: v = 0x00800300; break; /* PAL-I */
     case XC_FACTORY_GAME_REGION: v = 4; break;        /* rest of world (the XBE allows only this) */
     default: v = 0; break;                            /* audio flags, time zone, parental: 0 */
@@ -83,12 +83,11 @@ ULONG XBAPI xbox_PhyGetLinkState(BOOLEAN Verify)
 /* AV_QUERY_AV_CAPABILITIES (6): AV pack | video standard | refresh and HDTV flags. JSRF's XDK
  * 4134 D3D (D3D_GetAdapterModeCount 0x19A2F0 / EnumAdapterModes) keeps only display modes whose
  * refresh bits match, so an answer of 0 left no modes and the renderer gave up before creating
- * a device. Report a PAL console on SCART, at 60 Hz with PAL60 (rejet.ini) or 50 Hz. */
+ * a device. Report a PAL console on SCART at 60 Hz (PAL60). */
 #define AV_QUERY_AV_CAPABILITIES 6
 #define AV_PACK_SCART            0x00000003
 #define AV_STANDARD_PAL_I        0x00000300
 #define AV_FLAGS_60HZ            0x00400000
-#define AV_FLAGS_50HZ            0x00800000
 
 VOID XBAPI xbox_AvSendTVEncoderOption(PVOID RegisterBase, ULONG Option, ULONG Param, PULONG Result)
 {
@@ -96,7 +95,7 @@ VOID XBAPI xbox_AvSendTVEncoderOption(PVOID RegisterBase, ULONG Option, ULONG Pa
     (void)RegisterBase;
     (void)Param;
     if (Option == AV_QUERY_AV_CAPABILITIES)
-        v = AV_PACK_SCART | AV_STANDARD_PAL_I | (g_settings.pal60 ? AV_FLAGS_60HZ : AV_FLAGS_50HZ);
+        v = AV_PACK_SCART | AV_STANDARD_PAL_I | AV_FLAGS_60HZ;
     KTRACE("AvSendTVEncoderOption(%lu) -> %08lX\n", Option, v);
     if (Result)
         *Result = v;
