@@ -8,7 +8,9 @@ What ReJet adds to the original game, done and planned. Every enhancement is a s
 |---|---|
 | ReJet menu | In-game pause menu in the JSRF style with the ReJet logo and animations (slide in/out, staggered rows, gliding selection); controller and keyboard; settings saved at once. |
 | Bug reports | Menu → Report a bug: a capture of the moment plus a category and typed note (`note.txt`). F10/F11/F12 for markers, captures, screenshots, with on-screen confirmations. |
-| Any resolution | 640x480 up to 2880x2160 (4:3 until widescreen), live (device reset). VSync live too. |
+| Any resolution | 480 to 2160 lines in the chosen aspect, live (device reset). VSync live too. |
+| Widescreen (Hor+) | 16:10, 16:9, 21:9, live: the game's projection is widened (more visible at the sides, same vertical view); the HUD stretches with the screen. |
+| Cleaner 2D at high resolution | No dark seams around 2D art (DXT transparent texels get their neighbours' colour) and no coloured lines along text boxes (quad texture coordinates pulled in by half a texel). |
 | Full screen, window size | Borderless full screen, and a window size independent of the resolution, live. DPI aware (sharp on scaled displays). |
 | Texture filtering | Anisotropic 2x-16x, live. |
 | FPS counter | Live. |
@@ -20,7 +22,7 @@ What ReJet adds to the original game, done and planned. Every enhancement is a s
 | Idea | Why | What it needs |
 |---|---|---|
 | MSAA | Smoother edges. | A multisampled scene buffer resolved into the back buffer (and back to the DISCARD swap effect); the device reset path exists now. |
-| Widescreen (Hor+) | JSRF is 4:3; most screens are 16:9 or wider. | Patch the projection (renderer slot 31 / camera +0x74, docs/SUBSYSTEMS.md); check the HUD, map and cutscene bars. |
+| HUD at 4:3 in widescreen | The stretched HUD looks wide. | Squeeze 2D draws that don't span the screen (ReWhacked's KeepHudProportions); JSRF draws much of its 2D with a matrix-based program (116), so detect orthographic draws too. |
 | Right-stick camera | The original camera only recentres (L trigger); a right-stick orbit is standard now. | Hook the camera update (docs/SUBSYSTEMS.md); ReWhacked's orbit camera is the model. |
 | Button remapping | Players expect it on PC; keyboard layout is fixed now. | A Controls page that edits bindings, saved to `rejet.ini`. |
 | Custom soundtrack | The Xbox let JSRF play music ripped to the hard disk. | Map a Windows folder of music to the Xbox soundtrack API (XAPI soundtracks, DSound/WMA decode); check the game's use first. |

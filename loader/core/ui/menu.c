@@ -91,6 +91,7 @@ typedef struct Glyph {
     float u0, v0, u1, v1; /* atlas texture coordinates */
     float w, h;           /* cell size in pixels */
     float adv;            /* advance */
+    float left;           /* margin left of the pen position (overhangs) */
 } Glyph;
 
 static Glyph g_glyph[FONT_COUNT][LAST_CHAR - FIRST_CHAR + 1];
@@ -281,7 +282,7 @@ static int build_atlas(UINT bw, UINT bh)
                               CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, fonts[f].face);
         HGDIOBJ old = SelectObject(dc, h);
         TEXTMETRICW tm;
-        int pad = fonts[f].italic ? px / 3 : 2; /* italic overhang */
+        int pad = (fonts[f].italic ? px / 3 : px / 8) + 3; /* margin both sides: overhangs and filtering */
         GetTextMetricsW(dc, &tm);
         g_font_px[f] = (float)tm.tmHeight;
         for (int c = FIRST_CHAR; c <= LAST_CHAR; c++) {
@@ -289,16 +290,19 @@ static int build_atlas(UINT bw, UINT bh)
             SIZE sz;
             int cw;
             Glyph *g = &g_glyph[f][c - FIRST_CHAR];
+            memset(g, 0, sizeof *g);
+            if (f == FONT_TITLE && !strchr("ReJt", c)) /* the title font only writes "ReJet" (no logo) */
+                continue;
             GetTextExtentPoint32W(dc, &wc, 1, &sz);
-            cw = sz.cx + pad + 2;
+            cw = sz.cx + 2 * pad;
             if (x + cw > ATLAS) {
                 x = 0;
-                y += row + 2;
+                y += row + 6;
                 row = 0;
             }
             if (y + tm.tmHeight > logo_top - 4)
                 break;
-            TextOutW(dc, x + 1, y, &wc, 1);
+            TextOutW(dc, x + pad, y, &wc, 1);
             g->u0 = (float)x / ATLAS;
             g->v0 = (float)y / ATLAS;
             g->u1 = (float)(x + cw) / ATLAS;
@@ -306,7 +310,8 @@ static int build_atlas(UINT bw, UINT bh)
             g->w = (float)cw;
             g->h = (float)tm.tmHeight;
             g->adv = (float)sz.cx;
-            x += cw + 2;
+            x += cw + 6; /* gaps keep neighbours out of the bilinear filter */
+            g->left = (float)pad;
             if (tm.tmHeight > row)
                 row = tm.tmHeight;
         }
@@ -365,6 +370,9 @@ static IDirect3DStateBlock9 *g_state;
 static float g_fade = 1.0f; /* opacity for what is drawn next (animations) */
 
 static float X(float x) { return g_ox + x * g_scale; }
+/* The screen's edges on the canvas (beyond 0..1280 on wide screens). */
+static float canvas_left(void) { return -g_ox / g_scale; }
+static float canvas_right(void) { return 1280.0f + g_ox / g_scale; }
 static float Y(float y) { return y * g_scale; }
 
 /* A quad in back-buffer pixels; `skew` shifts the top edge right (parallelograms). */
@@ -418,7 +426,8 @@ static void text(int font, float x, float y, int align, DWORD c, const char *s)
                 continue;
             g = &g_glyph[font][ch - FIRST_CHAR];
             if (ch != ' ')
-                quad_px(px + off, py + off, px + off + g->w, py + off + g->h, 0, col, g->u0, g->v0, g->u1, g->v1);
+                quad_px(px + off - g->left, py + off, px + off - g->left + g->w, py + off + g->h, 0, col, g->u0, g->v0,
+                        g->u1, g->v1);
             px += g->adv;
         }
     }
@@ -764,13 +773,12 @@ static int g_page_dir = 1, g_value_dir, g_closing;
 static float g_sel_pos; /* the selection bar's row, gliding towards the selected one */
 
 /* Choice lists and the indices the menu edits (synced with g_settings). */
-static const int RES[][2] = {{640, 480}, {960, 720}, {1280, 960}, {1440, 1080}, {1600, 1200},
-                             {1920, 1440}, {2560, 1920}, {2880, 2160}};
-static const char *const RES_NAMES[] = {"640 x 480", "960 x 720", "1280 x 960", "1440 x 1080", "1600 x 1200",
-                                        "1920 x 1440", "2560 x 1920", "2880 x 2160"};
+/* Resolution and window size are chosen by height; the width follows the aspect setting. */
+static const int RES_H[] = {480, 720, 960, 1080, 1200, 1440, 1600, 2160};
 static const int WIN_H[] = {480, 600, 720, 840, 960, 1080, 1200, 1440};
-static const char *const WIN_NAMES[] = {"640 x 480", "800 x 600", "960 x 720", "1120 x 840", "1280 x 960",
-                                        "1440 x 1080", "1600 x 1200", "1920 x 1440"};
+static char g_res_text[8][16], g_win_text[8][16];
+static const char *RES_NAMES[8], *WIN_NAMES[8];
+static const char *const ASPECT_NAMES[] = {"4:3 (original)", "16:10", "16:9", "21:9"};
 static const int ANISO[] = {1, 2, 4, 8, 16};
 static const char *const ANISO_NAMES[] = {"Original", "2x", "4x", "8x", "16x"};
 static const char *const LANG_NAMES[] = {"Japanese", "English", "French", "German", "Spanish", "Italian"};
@@ -779,6 +787,17 @@ static const char *const REPORT_KINDS[] = {"Graphics", "Audio", "Controls", "Gam
 static const char *const ONOFF[] = {"Off", "On"};
 
 static int g_res_i, g_win_i, g_aniso_i, g_kind_i;
+
+static void size_names(void)
+{
+    float ar = settings_aspect_ratio(g_settings.aspect);
+    for (int i = 0; i < 8; i++) {
+        snprintf(g_res_text[i], sizeof g_res_text[i], "%d x %d", ((int)(RES_H[i] * ar + 0.5f) + 1) & ~1, RES_H[i]);
+        snprintf(g_win_text[i], sizeof g_win_text[i], "%d x %d", (int)(WIN_H[i] * ar + 0.5f), WIN_H[i]);
+        RES_NAMES[i] = g_res_text[i];
+        WIN_NAMES[i] = g_win_text[i];
+    }
+}
 static char g_note[160];
 
 static int index_of(const int *list, int n, int v)
@@ -792,10 +811,8 @@ static int index_of(const int *list, int n, int v)
 
 static void sync_from_settings(void)
 {
-    g_res_i = 2;
-    for (int i = 0; i < (int)(sizeof RES / sizeof RES[0]); i++)
-        if (RES[i][0] == g_settings.width && RES[i][1] == g_settings.height)
-            g_res_i = i;
+    size_names();
+    g_res_i = index_of(RES_H, (int)(sizeof RES_H / sizeof RES_H[0]), g_settings.height);
     g_win_i = index_of(WIN_H, (int)(sizeof WIN_H / sizeof WIN_H[0]), g_settings.window_height);
     g_aniso_i = index_of(ANISO, (int)(sizeof ANISO / sizeof ANISO[0]), g_settings.anisotropy);
 }
@@ -804,8 +821,8 @@ static void sync_from_settings(void)
  * state; the atlas is rebuilt for the new size on the next draw. */
 static void changed_display(void)
 {
-    g_settings.width = RES[g_res_i][0];
-    g_settings.height = RES[g_res_i][1];
+    g_settings.height = RES_H[g_res_i]; /* the width follows the aspect (d3d.c) */
+    size_names();
     settings_save();
     if (g_state) {
         IDirect3DStateBlock9_Release(g_state);
@@ -855,6 +872,8 @@ static Item g_main[] = {
 static Item g_display[] = {
     CHOICE("Resolution", g_res_i, RES_NAMES, 0, changed_display,
            "How sharp the game is drawn (the Xbox drew 640 x 480)."),
+    CHOICE("Aspect ratio", g_settings.aspect, ASPECT_NAMES, 0, changed_display,
+           "Wider shapes show more at the sides (the HUD stretches with the screen)."),
     CHOICE("Window size", g_win_i, WIN_NAMES, 0, changed_window,
            "How big the window is (fitted to the screen). Full screen ignores it."),
     TOGGLE("Full screen", g_settings.fullscreen, 0, NULL, "Borderless window over the whole monitor."),
@@ -1094,7 +1113,8 @@ static void draw_stripes(double t)
     static const DWORD col[] = {0x14C8F01Eu, 0x10FF2D8Au, 0x0E19C8C8u, 0x12C8F01Eu, 0x0CFF2D8Au};
     for (int i = 0; i < 5; i++) {
         float w = 90.0f + 50.0f * (float)(i % 3);
-        float x = (float)fmod(t * (0.025 + 0.008 * i) + i * 410.0, 2200.0) - 600.0f;
+        float span = canvas_right() - canvas_left() + 900;
+        float x = canvas_left() - 600 + (float)fmod(t * (0.025 + 0.008 * i) + i * 410.0, (double)span);
         box(x, -10, x + w, 970, 380, col[i]);
     }
 }
@@ -1115,18 +1135,20 @@ static void draw_menu(void)
 
     /* title strip: slides in from the left; the pink underline grows */
     {
-        float dx = -1000 * slide, tx, right;
+        float dx = -(1000 - canvas_left()) * slide, tx, right;
         /* the strip fits the logo (or "ReJet") and the longest page name */
         tx = g_logo_px ? 64 + 76 * g_logo_aspect + 30 : 360;
         right = tx + text_width(FONT_ITEM, "REPORT A BUG") + 60;
         if (right < 700)
             right = 700;
-        box(-40 + dx, 70, right + dx, 190, 40, C_LIME);
+        box(canvas_left() - 40 + dx, 70, right + dx, 190, 40, C_LIME);
         for (int i = 0; i < 4; i++) { /* moving speed lines inside the strip */
             float sx = 120 + (float)fmod(t * 0.12 + i * 150.0, (double)right - 140.0);
             box(sx + dx, 78, sx + 26 + dx, 182, 40, 0x22000000u);
         }
-        box(-40 + dx, 182, -40 + dx + (right - 20) * ease_out(progress(g_t_open + 120, 300)), 196, 40, C_PINK);
+        box(canvas_left() - 40 + dx, 182,
+            canvas_left() - 40 + dx + (right - 20 - canvas_left()) * ease_out(progress(g_t_open + 120, 300)), 196, 40,
+            C_PINK);
         if (g_logo_px)
             logo(64 + dx, 92, 76, C_WHITE); /* centred in the strip */
         else
@@ -1212,7 +1234,7 @@ static void draw_menu(void)
     }
     {
         float dy = 80 * slide;
-        box(-40, 880 + dy, 1320, 930 + dy, 0, C_SHADE);
+        box(canvas_left(), 880 + dy, canvas_right(), 930 + dy, 0, C_SHADE);
         text(FONT_SMALL, 640, 891 + dy, 1, C_WHITE,
              g_text_focus ? "Type your note   Enter / Down  next   Esc  back"
                           : "A / Enter  select     B / Esc  back     Left / Right  change     Start / F1  resume");

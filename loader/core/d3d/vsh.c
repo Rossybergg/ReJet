@@ -65,6 +65,34 @@ int vsh_last_is_2d(void)
     return !g_reads_viewport;
 }
 
+/* Texture coordinate 0 copied straight from one input register (mov oT0.xy, vN): N, else -1.
+ * d3d.c uses it to pull single 2D quads' coordinates half a texel in at high resolutions. */
+static int g_t0_input = -2; /* -2: not written yet */
+static char g_mac_val[512]; /* the current instruction's MAC expression */
+
+int vsh_last_t0_input(void)
+{
+    return g_t0_input >= 0 ? g_t0_input : -1;
+}
+
+int vsh_input_offset(const DWORD *decl, unsigned reg)
+{
+    unsigned offset = 0;
+    for (; decl && *decl != 0xFFFFFFFF; decl++) {
+        DWORD t = *decl;
+        if ((t >> 29) == 2 && !((t >> 28) & 1)) {
+            unsigned r = t & 0x1F, type = (t >> 16) & 0xFF, comps = type >> 4;
+            int is_float = (type & 0xF) == 2;
+            if (r == reg)
+                return is_float && comps >= 2 ? (int)offset : -1;
+            offset += type == 0x40 || type == 0x44 || type == 0x25 || type == 0x21 ? 4
+                    : type == 0x45 || type == 0x41                                ? 8
+                                                                                   : 4 * comps;
+        }
+    }
+    return -1;
+}
+
 /* Source operand as an HLSL float4 expression. */
 static void source(char *buf, size_t cap, unsigned mux, unsigned reg, unsigned v, unsigned cidx, unsigned a0x,
                    unsigned neg, unsigned sw)
@@ -99,6 +127,13 @@ static void write_masked(Out *o, const char *dst, unsigned mask, const char *val
         if (mask & (8u >> i))
             m[n++] = comp[i];
     m[n] = 0;
+    if (n && !strcmp(dst, "ot0")) {
+        const char *e = !strcmp(val, "mac") ? g_mac_val : val; /* a MOV's MAC is its source */
+        const char *dot = strchr(e, '.'), *close = strchr(e, ')');
+        int direct = !strncmp(e, "(v", 2) && dot && !strncmp(dot, ".xy", 3) && close && close[1] == 0;
+        int reg = direct ? atoi(e + 2) : -1;
+        g_t0_input = (g_t0_input == -2 || g_t0_input == reg) && reg >= 0 ? reg : -1;
+    }
     if (n)
         emit(o, "    %s.%s = %s.%s;\n", dst, m, val, m);
 }
@@ -132,6 +167,7 @@ int vsh_to_hlsl(const DWORD *program, const DWORD *decl, char *hlsl, size_t cap)
 {
     Out o = {hlsl, cap};
     unsigned n = program[0] >> 16, present[16];
+    g_t0_input = -2;
     parse_decl(decl, present);
 
     g_reads_viewport = 0;
@@ -206,6 +242,7 @@ int vsh_to_hlsl(const DWORD *program, const DWORD *decl, char *hlsl, size_t cap)
                 log_printf("vsh: unknown MAC op %u\n", mac);
                 return 0;
             }
+            snprintf(g_mac_val, sizeof g_mac_val, "%s", val);
             emit(&o, "    mac = %s;\n", val);
         }
         if (ilu) {

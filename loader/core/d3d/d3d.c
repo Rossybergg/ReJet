@@ -175,15 +175,16 @@ static void apply_window(void)
                      mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
     }
     else {
-        /* the window height is in Windows' scaled pixels, independent of the render resolution; 4:3,
-         * shrunk to fit the screen */
-        LONG ch = (LONG)((LONGLONG)g_settings.window_height * dpi / 96), cw = ch * 4 / 3;
+        /* the window height is in Windows' scaled pixels, independent of the render resolution; the
+         * aspect setting's shape, shrunk to fit the screen */
+        float ar = settings_aspect_ratio(g_settings.aspect);
+        LONG ch = (LONG)((LONGLONG)g_settings.window_height * dpi / 96), cw = (LONG)((float)ch * ar + 0.5f);
         RECT r, frame = {0, 0, 0, 0};
         LONG ww, wh;
         AdjustWindowRect(&frame, WS_OVERLAPPEDWINDOW, FALSE);
         if (ch + (frame.bottom - frame.top) > mi.rcWork.bottom - mi.rcWork.top) {
             ch = mi.rcWork.bottom - mi.rcWork.top - (frame.bottom - frame.top);
-            cw = ch * 4 / 3;
+            cw = (LONG)((float)ch * ar + 0.5f);
         }
         r.left = r.top = 0;
         r.right = cw;
@@ -272,6 +273,7 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
     }
     g_xw = w;
     g_xh = h;
+    g_settings.width = ((int)((float)g_settings.height * settings_aspect_ratio(g_settings.aspect) + 0.5f) + 1) & ~1;
     g_hw = (UINT)g_settings.width;
     g_hh = (UINT)g_settings.height;
     g_sx = (float)g_hw / (float)g_xw;
@@ -1050,6 +1052,7 @@ static unsigned g_vs_decl_n[MAX_SHADERS], g_vs_func_n[MAX_SHADERS]; /* dwords, f
 static IDirect3DVertexShader9 *g_vs_host[MAX_SHADERS];
 static IDirect3DVertexDeclaration9 *g_vs_vdecl[MAX_SHADERS];
 static BYTE g_vs_state[MAX_SHADERS]; /* 0 untried, 1 ready, 2 failed */
+static short g_vs_t0_off[MAX_SHADERS]; /* byte offset of the input copied to texcoord 0, or -1 */
 static unsigned g_vs_count, g_ps_count;
 
 /* Translate and compile program i (once), when the game creates it, so play never waits on the
@@ -1067,6 +1070,10 @@ static void ensure_vs(unsigned i)
     }
     t0 = perf_now();
     g_vs_host[i] = vsh_compile((IDirect3DDevice9 *)g_dev, g_vs_func[i], g_vs_decl[i], i);
+    {
+        int reg = vsh_last_t0_input();
+        g_vs_t0_off[i] = (short)(reg >= 0 ? vsh_input_offset(g_vs_decl[i], (unsigned)reg) : -1);
+    }
     perf_end(PERF_VSC, t0);
     g_vs_vdecl[i] = vsh_declaration((IDirect3DDevice9 *)g_dev, g_vs_decl[i], NULL);
     g_vs_state[i] = (g_vs_host[i] && g_vs_vdecl[i]) ? 1 : 2;
@@ -1502,8 +1509,37 @@ static D3DTRANSFORMSTATETYPE host_transform(DWORD s)
     }
 }
 
+/* Widescreen (Hor+). The game draws for a 640x480 screen, which ReJet stretches over the
+ * render target whatever its shape; the game's 3D projection fixes the horizontal field of view
+ * (m00 = 1, 90 degrees) and derives the vertical one for 4:3 (m11 = 1.333). Dividing m00 by
+ * k = (render aspect / 4:3) keeps the vertical view and shows more at the sides once
+ * stretched. The engine builds the matrix in its own memory, reuses it for its vertex-program
+ * constants and passes it here (from 0x154A39), so it is patched in place; a matrix already
+ * patched is recognised, so repeated calls don't compound. 2D is stretched with the screen. */
+static float widescreen_k(void)
+{
+    return ((float)g_hw / (float)g_hh) / (4.0f / 3.0f);
+}
+
+static D3DMATRIX *g_proj; /* the game's projection matrix (its memory), re-patched on display changes */
+
+static void widescreen_projection(D3DMATRIX *m)
+{
+    static float original, patched;
+    g_proj = m;
+    float k = widescreen_k();
+    if (m->_34 == 0.0f || m->_44 != 0.0f) /* not a perspective projection */
+        return;
+    if (m->_11 != patched || patched == 0.0f)
+        original = m->_11;
+    m->_11 = original / k;
+    patched = m->_11;
+}
+
 static HRESULT XBAPI hle_D3DDevice_SetTransform(DWORD State, const D3DMATRIX *pMatrix)
 {
+    if (State == 1 && pMatrix)
+        widescreen_projection((D3DMATRIX *)pMatrix); /* game memory */
     if (State < 10 && pMatrix) {
         static LONG logged[10];
         if (InterlockedIncrement(&logged[State]) <= 3)
@@ -1737,7 +1773,9 @@ static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, X
 static void change_display(void)
 {
     D3DPRESENT_PARAMETERS hp = g_hp;
-    UINT w = (UINT)g_settings.width, h = (UINT)g_settings.height;
+    UINT w, h = (UINT)g_settings.height;
+    g_settings.width = ((int)((float)h * settings_aspect_ratio(g_settings.aspect) + 0.5f) + 1) & ~1;
+    w = (UINT)g_settings.width;
     HRESULT hr;
     if (!g_dev)
         return;
@@ -1773,6 +1811,10 @@ static void change_display(void)
     for (unsigned i = 0; i < g_rt_count; i++)
         if (!rt_create_host(&g_rt[i]))
             log_printf("d3d: render target #%u could not be recreated\n", i);
+    if (g_proj && (g_xform_set & 2)) { /* the new aspect into the game's projection */
+        widescreen_projection(g_proj);
+        g_xform[1] = *g_proj;
+    }
     /* state D3D9 forgot */
     for (unsigned i = 0; i < 256; i++)
         if (g_rs_set[i])
@@ -2312,11 +2354,63 @@ static const BYTE *fix_ff_vertices(const BYTE *verts, UINT first, UINT last, UIN
     return buf;
 }
 
+/* Textured quads (2D art: text boxes, "Press Start", icons) drawn above 640x480: their
+ * outermost pixels sample up to half a texel past the quad's edge, into the next image of the
+ * game's texture atlases (a thin coloured line along the edge; at 640x480 the Xbox samples
+ * texel centres there). Pull each quad's texture coordinates in by half a texel. Vertex
+ * programs whose texcoord 0 is a copy of an input register only, a single quad or a batch of
+ * them (`group` vertices each: 6 for triangle-list pairs, 4 for quad lists); a copy is drawn,
+ * the game's vertices are untouched. */
+static const BYTE *inset_quad_texcoords(const BYTE *verts, UINT first, UINT last, UINT stride, UINT group)
+{
+    static BYTE copy[96 * 128];
+    const XD3DPixelContainer *t = g_textures[0];
+    unsigned i = g_cur_vs >> 1, n = last - first + 1, changed = 0;
+    int off;
+    float du, dv;
+    if (!group && n >= 3 && n <= 6)
+        group = n; /* one quad (fan, strip, or indexed) */
+    if (!(g_cur_vs & 1) || !t || !group || n % group || n > 96 || stride > 128 || g_tsx <= 1.01f ||
+        i >= MAX_SHADERS || (off = g_vs_t0_off[i]) < 0 || (UINT)off + 8 > stride)
+        return verts;
+    if (t->Size) /* linear: texel coordinates */
+        du = dv = 0.5f;
+    else {
+        du = 0.5f / (float)(1u << XFMT_USIZE(t->Format));
+        dv = 0.5f / (float)(1u << XFMT_VSIZE(t->Format));
+    }
+    memcpy(copy, verts + (SIZE_T)first * stride, (SIZE_T)n * stride);
+    for (unsigned q = 0; q < n; q += group) {
+        float u0 = 1e30f, u1 = -1e30f, v0 = 1e30f, v1 = -1e30f;
+        for (unsigned k = q; k < q + group; k++) {
+            const float *uv = (const float *)(copy + k * stride + off);
+            u0 = uv[0] < u0 ? uv[0] : u0;
+            u1 = uv[0] > u1 ? uv[0] : u1;
+            v0 = uv[1] < v0 ? uv[1] : v0;
+            v1 = uv[1] > v1 ? uv[1] : v1;
+        }
+        if (u1 - u0 < 4 * du || v1 - v0 < 4 * dv) /* not a whole image (or degenerate) */
+            continue;
+        for (unsigned k = q; k < q + group; k++) {
+            float *uv = (float *)(copy + k * stride + off);
+            uv[0] += uv[0] == u0 ? du : uv[0] == u1 ? -du : 0;
+            uv[1] += uv[1] == v0 ? dv : uv[1] == v1 ? -dv : 0;
+        }
+        changed++;
+    }
+    if (g_capture_log && g_frame == g_capture_frame)
+        fprintf(g_capture_log, "      inset: %u of %u quads, half texel %.4f,%.4f, texcoord offset %d\n", changed,
+                n / group, (double)du, (double)dv, off);
+    return changed ? copy - (SIZE_T)first * stride : verts;
+}
+
 /* Draw `count` vertices from `verts` (optionally indexed by 16-bit `idx`). */
 static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, const WORD *idx)
 {
     D3DPRIMITIVETYPE pt;
     UINT prims, lo = 0, hi = 0;
+    /* quad batches for inset_quad_texcoords: triangle-list pairs, or quad lists */
+    UINT group = idx ? 0 : (xprim == 5 && count % 6 == 0) ? 6 : (xprim == 8 && count % 4 == 0) ? 4 : 0;
     int quads;
     LONGLONG t0 = perf_now();
     g_dl_prim = xprim;
@@ -2376,10 +2470,12 @@ static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, con
             if (idx[i] > hi)
                 hi = idx[i];
         }
+        verts = inset_quad_texcoords(verts, lo, hi, stride, group);
         verts = fix_ff_vertices(verts, lo, hi, stride);
         IDirect3DDevice9Ex_DrawIndexedPrimitiveUP(g_dev, pt, lo, hi - lo + 1, prims, idx, D3DFMT_INDEX16, verts, stride);
     }
     else {
+        verts = inset_quad_texcoords(verts, 0, count - 1, stride, group);
         verts = fix_ff_vertices(verts, 0, count - 1, stride);
         IDirect3DDevice9Ex_DrawPrimitiveUP(g_dev, pt, prims, verts, stride);
     }

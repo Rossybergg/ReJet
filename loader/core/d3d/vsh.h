@@ -11,6 +11,12 @@
 /* After vsh_compile/vsh_to_hlsl: nonzero if that program is 2D (gives screen positions itself,
  * without the viewport-constant epilogue of 3D programs). */
 int vsh_last_is_2d(void);
+
+/* After vsh_compile: the input register copied straight to texture coordinate 0, or -1. */
+int vsh_last_t0_input(void);
+
+/* Byte offset of a float input register (2+ components) in the declaration's vertex, or -1. */
+int vsh_input_offset(const DWORD *decl, unsigned reg);
 #define VSH_CONSTANTS 198
 
 int vsh_to_hlsl(const DWORD *program, const DWORD *decl, char *hlsl, size_t cap);

@@ -8,12 +8,18 @@
 #include "settings.h"
 
 Settings g_settings = {
-    1280, 960, 960, 0, 0, 1, 0, /* display (host vsync off: the emulated vblank paces the game) */
+    1280, 960, 960, ASPECT_4_3, 0, 0, 1, 0, /* display (host vsync off: the emulated vblank paces the game) */
     100, 0,                     /* audio */
     GAME_LANG_ENGLISH,          /* console */
 };
 
 static WCHAR g_path[MAX_PATH]; /* rejet.ini, or REJET_INI */
+
+float settings_aspect_ratio(int aspect)
+{
+    static const float r[ASPECT_COUNT] = {4.0f / 3.0f, 16.0f / 10.0f, 16.0f / 9.0f, 21.0f / 9.0f};
+    return aspect >= 0 && aspect < ASPECT_COUNT ? r[aspect] : r[0];
+}
 
 static int clampi(int v, int lo, int hi)
 {
@@ -43,6 +49,7 @@ void settings_load(void)
     GET("Display", "Width", width, 320, 7680);
     GET("Display", "Height", height, 240, 4320);
     GET("Display", "WindowHeight", window_height, 240, 4320);
+    GET("Display", "Aspect", aspect, 0, ASPECT_COUNT - 1);
     GET("Display", "VSync", vsync, 0, 1);
     GET("Display", "Fullscreen", fullscreen, 0, 1);
     GET("Display", "Anisotropy", anisotropy, 1, 16);
@@ -69,6 +76,7 @@ void settings_save(void)
     PUT("Display", "Width", width);
     PUT("Display", "Height", height);
     PUT("Display", "WindowHeight", window_height);
+    PUT("Display", "Aspect", aspect);
     PUT("Display", "VSync", vsync);
     PUT("Display", "Fullscreen", fullscreen);
     PUT("Display", "Anisotropy", anisotropy);
