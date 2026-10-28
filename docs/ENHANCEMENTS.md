@@ -6,7 +6,8 @@ What ReJet adds to the original game, done and planned. Every enhancement is a s
 
 | Enhancement | Notes |
 |---|---|
-| ReJet menu | In-game pause menu in the JSRF style with the ReJet logo and animations (slide in/out, staggered rows, gliding selection); controller and keyboard; settings saved at once. |
+| ReJet menu | In-game pause menu in the JSRF style with the ReJet logo and animations (slide in/out, staggered rows, gliding selection); controller and keyboard, with Xbox button icons when a controller is connected; settings saved at once. |
+| Presentation | ReJet icon (from the logo's R), clean window title, a start-up splash with the logo that fades into the game's first logo. |
 | Bug reports | Menu → Report a bug: a capture of the moment plus a category and typed note (`note.txt`). F10/F11/F12 for markers, captures, screenshots, with on-screen confirmations. |
 | Any resolution | 480 to 2160 lines in the chosen aspect, live (device reset). VSync live too. |
 | Widescreen (Hor+) | 16:10, 16:9, 21:9, live: the game's projection and its culling are widened (more visible at the sides, same vertical view, no pop-in at the old edges); 2D keeps 4:3 proportions in the middle (full-screen 2D such as fades and cutscene bars spans the screen). |

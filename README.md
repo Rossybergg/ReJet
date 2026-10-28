@@ -35,6 +35,7 @@ ReJet runs the original Xbox game *Jet Set Radio Future* (Smilebit / Sega, 2002)
 
 **Made for testing**
 - The **ReJet menu** (F1, or Back + Start on a controller) pauses the game; **Report a bug** saves a capture of the moment with your note.
+- Xbox button icons in the menu when a controller is connected.
 - F12 screenshots, F11 bug captures, F10 log markers, each confirmed on screen.
 
 The full list, done and planned: [docs/ENHANCEMENTS.md](docs/ENHANCEMENTS.md).
@@ -46,8 +47,8 @@ The full list, done and planned: [docs/ENHANCEMENTS.md](docs/ENHANCEMENTS.md).
 - Your own disc image of **Jet Set Radio Future, PAL Xbox release** (title ID 49470018), as an `.iso` (a trimmed XISO or a full image), or a folder you've already extracted it to. Other regions (NTSC-U, NTSC-J) aren't supported yet.
 
 **Install**
-1. Download the latest release and unzip it anywhere (or [build it yourself](#building-from-source)). It contains `ReJetLoader.exe` and `rejet.dll`.
-2. Run `ReJetLoader.exe`. The first time, ReJet asks for your game: choose your disc image (it is checked and extracted into a `Game` folder next to ReJet, with a progress bar) or your extracted folder.
+1. Download the latest release and unzip it anywhere (or [build it yourself](#building-from-source)). It contains `ReJet.exe` and `rejet.dll`.
+2. Run `ReJet.exe`. The first time, ReJet asks for your game: choose your disc image (it is checked and extracted into a `Game` folder next to ReJet, with a progress bar) or your extracted folder.
 3. Play. The ReJet menu (**F1**, or **Back + Start** on a controller) has the display and audio settings.
 
 To use other game files later: ReJet menu → Game → *Choose other game files* (asked at the next start).
@@ -72,6 +73,7 @@ To use other game files later: ReJet menu → Game → *Choose other game files*
 - The **boost effect** works but isn't an exact match for the Xbox (slightly darker, a different blur).
 - Some **flickering dark patches** on grind rails in the intro fly-through, and a large flat white shape in one shot of it.
 - In widescreen the HUD sits in the middle 4:3 area rather than at the screen edges.
+- 60 fps only: the game's logic advances once per frame (see [docs/HIGH_FRAME_RATE.md](docs/HIGH_FRAME_RATE.md)).
 - Mostly tested in the opening chapters; later stages, multiplayer (local split screen) and the custom soundtrack feature are untested.
 - The game is paused while the ReJet menu is open, so F12 doesn't take screenshots there.
 
@@ -79,7 +81,7 @@ The current list is in [docs/KNOWN_BUGS.md](docs/KNOWN_BUGS.md).
 
 ## Reporting bugs
 
-Open the ReJet menu where the problem is (F1, or Back + Start), choose **Report a bug**, pick what went wrong and type a note. ReJet saves a capture of that moment in `captures\` next to `ReJetLoader.exe`. Open an issue describing what happened, and attach that capture folder (zipped) and `loader.log`. More detail: [docs/TESTING.md](docs/TESTING.md).
+Open the ReJet menu where the problem is (F1, or Back + Start), choose **Report a bug**, pick what went wrong and type a note. ReJet saves a capture of that moment in `captures\` next to `ReJet.exe`. Open an issue describing what happened, and attach that capture folder (zipped) and `loader.log`. More detail: [docs/TESTING.md](docs/TESTING.md).
 
 ## Building from source
 
@@ -89,12 +91,12 @@ Requirements: Visual Studio with **Desktop development with C++** (tested with V
 tools\loader\build.bat
 ```
 
-This writes `build\loader\ReJetLoader.exe` and `rejet.dll`. Run `ReJetLoader.exe` from there (first-run setup as above), or for development pass the game directly: `ReJetLoader.exe <path to default.xbe> [seconds, 0 = until closed]`; `play.bat 0` does this for a game extracted to `%USERPROFILE%\GameData\JSRF`. Debugging switches (scripted input, screenshots every n frames, captures at a frame, traces) are listed in [docs/TESTING.md](docs/TESTING.md).
+This writes `build\loader\ReJet.exe` and `rejet.dll`. Run `ReJet.exe` from there (first-run setup as above), or for development pass the game directly: `ReJet.exe <path to default.xbe> [seconds, 0 = until closed]`; `play.bat` runs the build (with the same arguments, if any). Debugging switches (scripted input, screenshots every n frames, captures at a frame, traces) are listed in [docs/TESTING.md](docs/TESTING.md).
 
 **Repository layout**
 
 ```
-loader/       ReJetLoader.exe (address-space stub) and rejet.dll: XBE mapper, Xbox kernel, Direct3D / DirectSound /
+loader/       ReJet.exe (address-space stub) and rejet.dll: XBE mapper, Xbox kernel, Direct3D / DirectSound /
               controller replacements, the ReJet menu and first-run setup
 tools/        disc and XBE readers, build and code generation, Ghidra headless scripts
 config/       hashes of the supported disc and XBE, function inventory, kernel imports
@@ -102,9 +104,13 @@ include/xbox/ clean-room Xbox declarations
 docs/         progress log, subsystem map, enhancements, known bugs, testing guide
 ```
 
+## Versions
+
+ReJet uses [semantic versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`, in the `VERSION` file); while it is below 1.0 any release may change things. Each build also records its git commit: the ReJet menu (bottom right), the setup screen, the first line of `loader.log`, every bug capture and the files' Windows properties show it, for example `0.1.0+3437d69` (`-dirty` marks a build from uncommitted code). Please include it in bug reports. Release packages are made with `python tools/make_release.py` from a clean commit.
+
 ## How it works
 
-Xbox games are 32-bit x86 programs, like Windows programs. ReJet's tiny `ReJetLoader.exe` reserves the address range the game expects; `rejet.dll` loads `default.xbe` there, gives the game its own implementation of the Xbox kernel (threads, files, memory, timers), and patches the game's copies of the Xbox system libraries to jump to PC replacements: Direct3D 8 calls become Direct3D 9Ex (with the Xbox GPU's vertex programs and register combiners translated to shaders), DirectSound becomes a software mixer over XAudio2, and controller polling becomes XInput. Enhancements such as widescreen hook the game's renderer at specific, documented addresses ([docs/SUBSYSTEMS.md](docs/SUBSYSTEMS.md)). The development log is [docs/PROGRESS.md](docs/PROGRESS.md).
+Xbox games are 32-bit x86 programs, like Windows programs. ReJet's tiny `ReJet.exe` reserves the address range the game expects; `rejet.dll` loads `default.xbe` there, gives the game its own implementation of the Xbox kernel (threads, files, memory, timers), and patches the game's copies of the Xbox system libraries to jump to PC replacements: Direct3D 8 calls become Direct3D 9Ex (with the Xbox GPU's vertex programs and register combiners translated to shaders), DirectSound becomes a software mixer over XAudio2, and controller polling becomes XInput. Enhancements such as widescreen hook the game's renderer at specific, documented addresses ([docs/SUBSYSTEMS.md](docs/SUBSYSTEMS.md)). The development log is [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Credits and acknowledgements
 

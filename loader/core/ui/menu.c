@@ -23,6 +23,7 @@
 #include "kernel.h"
 #include "settings.h"
 #include "ui/menu.h"
+#include "version.gen.h"
 
 static MenuHost g_host;
 #define DEV ((IDirect3DDevice9Ex *)g_host.dev)
@@ -97,13 +98,30 @@ typedef struct Glyph {
 static Glyph g_glyph[FONT_COUNT][LAST_CHAR - FIRST_CHAR + 1];
 static float g_font_px[FONT_COUNT]; /* line height in back-buffer pixels */
 static float g_white_u, g_white_v;  /* a white texel, for solid shapes */
+
+/* Controller button shapes, drawn into the atlas at the menu's scale (sharp at any resolution,
+ * no image files) and tinted per button: face buttons are circles, bumpers and triggers pills,
+ * plus the d-pad. */
+enum { SHAPE_CIRCLE, SHAPE_PILL, SHAPE_CROSS, SHAPE_COUNT };
+typedef struct Shape {
+    float u0, v0, u1, v1, w, h;
+} Shape;
+static Shape g_shape[SHAPE_COUNT];
+
+/* Signed distance to a box of half size (a, b) with rounded corners of radius r. */
+static float sdf_box(float px, float py, float a, float b, float r)
+{
+    float qx = fabsf(px) - (a - r), qy = fabsf(py) - (b - r);
+    float ox = qx > 0 ? qx : 0, oy = qy > 0 ? qy : 0, in = qx > qy ? qx : qy;
+    return sqrtf(ox * ox + oy * oy) + (in < 0 ? in : 0) - r;
+}
 static IDirect3DTexture9 *g_atlas;
 static UINT g_bw, g_bh;             /* back-buffer size the atlas was built for */
 static float g_scale, g_ox;         /* canvas -> back buffer: x' = g_ox + x * g_scale */
 
 /* ------------------------------------------------------------------ logo */
 
-/* The ReJet logo: rejet_logo.png next to ReJetLoader.exe, else the copy built into rejet.dll
+/* The ReJet logo: rejet_logo.png next to ReJet.exe, else the copy built into rejet.dll
  * (resource REJET_LOGO, loader/res/), decoded with Windows Imaging Component. Without one the
  * menu writes "ReJet" in the title font. */
 static DWORD *g_logo_px; /* premultiplied BGRA, original size */
@@ -288,6 +306,22 @@ static int build_atlas(UINT bw, UINT bh)
         g_lv1 = ((float)(logo_top + (int)lh) - 0.5f) / ATLAS;
         g_logo_aspect = (float)g_logo_w / (float)g_logo_h;
     }
+    { /* room for the button shapes, bottom right (above the white block), one icon tall */
+        int s = (int)(44.0f * g_scale + 0.5f), sx = ATLAS - 12, top = ATLAS - 12 - s;
+        static const int widths[SHAPE_COUNT] = {1, 2, 1}; /* circle, pill, cross (in icon heights) */
+        for (int k = SHAPE_COUNT - 1; k >= 0; k--) {
+            int w = s * widths[k];
+            sx -= w + 6;
+            g_shape[k].u0 = (float)sx / ATLAS;
+            g_shape[k].v0 = (float)top / ATLAS;
+            g_shape[k].u1 = (float)(sx + w) / ATLAS;
+            g_shape[k].v1 = (float)(top + s) / ATLAS;
+            g_shape[k].w = (float)w;
+            g_shape[k].h = (float)s;
+        }
+        if (top - 4 < logo_top)
+            logo_top = top - 4; /* fonts stop above them too */
+    }
     for (int f = 0; f < FONT_COUNT; f++) {
         int px = (int)((float)fonts[f].size * g_scale + 0.5f);
         HFONT h = CreateFontW(-px, 0, 0, 0, fonts[f].weight, fonts[f].italic, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS,
@@ -331,6 +365,25 @@ static int build_atlas(UINT bw, UINT bh)
         DeleteObject(h);
     }
     GdiFlush();
+    /* controller button shapes (white coverage, tinted when drawn), bottom right */
+    for (int k = 0; k < SHAPE_COUNT; k++) {
+        Shape *sh = &g_shape[k];
+        int w = (int)sh->w, h = (int)sh->h, x0 = (int)(sh->u0 * ATLAS), y0 = (int)(sh->v0 * ATLAS);
+        for (int j = 0; j < h; j++)
+            for (int i = 0; i < w; i++) {
+                float px = (float)i + 0.5f - (float)w * 0.5f, py = (float)j + 0.5f - (float)h * 0.5f, d;
+                if (k == SHAPE_CROSS) { /* d-pad: two rounded bars */
+                    float arm = (float)h * 0.5f - 1, bar = (float)h * 0.17f;
+                    d = sdf_box(px, py, arm, bar, bar * 0.4f);
+                    d = fminf(d, sdf_box(px, py, bar, arm, bar * 0.4f));
+                }
+                else { /* circle or pill: a box with fully rounded ends */
+                    float hh = (float)h * 0.5f - 1;
+                    d = sdf_box(px, py, (float)w * 0.5f - 1, hh, hh);
+                }
+                bits[(y0 + j) * ATLAS + x0 + i] = (DWORD)(clamp01(0.5f - d) * 255.0f);
+            }
+    }
     /* a white block in the bottom-right corner for solid fills */
     for (int j = ATLAS - 6; j < ATLAS; j++)
         for (int i = ATLAS - 6; i < ATLAS; i++)
@@ -453,6 +506,73 @@ static float logo(float x, float y, float h, DWORD c)
         return 0;
     quad_px(X(x), Y(y), X(x + w), Y(y + h), 0, with_alpha(c, g_fade), g_lu0, g_lv0, g_lu1, g_lv1);
     return w;
+}
+
+/* Controller buttons as icons, `h` canvas units tall at (x, y); return the width. Face buttons
+ * in their Xbox colours with the letter; bumpers, triggers and the d-pad in dark grey; Menu
+ * (Start) and View (Back) with their symbols. */
+enum { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LB, BTN_RB, BTN_LT, BTN_RT, BTN_START, BTN_BACK, BTN_DPAD };
+
+static float button_width(int b, float h)
+{
+    return b >= BTN_LB && b <= BTN_RT ? h * 2 : h;
+}
+
+static void shape(int k, float x, float y, float w, float h, DWORD c)
+{
+    const Shape *s = &g_shape[k];
+    quad_px(X(x), Y(y), X(x + w), Y(y + h), 0, with_alpha(c, g_fade), s->u0, s->v0, s->u1, s->v1);
+}
+
+static float button_icon(int b, float x, float y, float h)
+{
+    static const DWORD face[4] = {0xFF5DBB3Fu, 0xFFE0453Cu, 0xFF3D8FE0u, 0xFFF2C12Eu};
+    static const char *const letter[4] = {"A", "B", "X", "Y"};
+    static const char *const pill[4] = {"LB", "RB", "LT", "RT"};
+    const DWORD dark = 0xFF3A4446u;
+    float w = button_width(b, h), fh = g_font_px[FONT_SMALL] / g_scale;
+    if (b <= BTN_Y) {
+        shape(SHAPE_CIRCLE, x, y, h, h, face[b]);
+        text(FONT_SMALL, x + h / 2, y + (h - fh) / 2, 1, b == BTN_Y ? 0xFF1A1A1Au : C_WHITE, letter[b]);
+    }
+    else if (b <= BTN_RT) {
+        shape(SHAPE_PILL, x, y, w, h, dark);
+        text(FONT_SMALL, x + w / 2, y + (h - fh) / 2, 1, C_WHITE, pill[b - BTN_LB]);
+    }
+    else if (b == BTN_START) { /* Menu: three lines */
+        shape(SHAPE_CIRCLE, x, y, h, h, dark);
+        for (int i = 0; i < 3; i++)
+            box(x + h * 0.3f, y + h * (0.32f + 0.16f * i), x + h * 0.7f, y + h * (0.32f + 0.16f * i) + h * 0.07f, 0,
+                C_WHITE);
+    }
+    else if (b == BTN_BACK) { /* View: two overlapping squares */
+        shape(SHAPE_CIRCLE, x, y, h, h, dark);
+        box(x + h * 0.36f, y + h * 0.28f, x + h * 0.68f, y + h * 0.56f, 0, C_WHITE);
+        box(x + h * 0.30f, y + h * 0.44f, x + h * 0.62f, y + h * 0.72f, 0, 0xFFBFC6C6u);
+    }
+    else
+        shape(SHAPE_CROSS, x, y, h, h, 0xFFD8DEDEu);
+    return w;
+}
+
+/* Is a controller connected? (checked every 1.5 s: asking about empty ports is slow) */
+static int pad_connected(void)
+{
+    static ULONGLONG checked;
+    static int connected, forced = -1;
+    ULONGLONG now = GetTickCount64();
+    if (forced < 0) /* REJET_PAD_ICONS=1: as if a controller were connected (tests) */
+        forced = GetEnvironmentVariableA("REJET_PAD_ICONS", NULL, 0) > 0;
+    if (forced)
+        return 1;
+    if (now - checked > 1500) {
+        XINPUT_STATE s;
+        checked = now;
+        connected = 0;
+        for (DWORD p = 0; p < 4 && !connected; p++)
+            connected = XInputGetState(p, &s) == ERROR_SUCCESS;
+    }
+    return connected;
 }
 
 static void flush(void)
@@ -774,9 +894,17 @@ typedef struct Item {
     int target;            /* action: page to open, -1 close the menu, -2 back */
     void (*changed)(void); /* after a change */
     const char *help;
+    signed char pad[2]; /* info rows: controller buttons shown as icons (BTN_* + 1; 0 = none) */
 } Item;
 
 static int g_page, g_sel[PAGE_COUNT];
+static int g_win_i;
+
+/* Rows that don't apply right now: greyed, skipped by the selection. */
+static int item_disabled(const Item *it)
+{
+    return it->value == &g_win_i && g_settings.fullscreen; /* the window size, in full screen */
+}
 static int g_stack[8], g_depth;
 
 /* Animation state (times from now_ms). */
@@ -798,7 +926,7 @@ static const char *const REPORT_KINDS[] = {"Graphics", "Audio", "Controls", "Gam
                                            "Slow or stutter", "Other"};
 static const char *const ONOFF[] = {"Off", "On"};
 
-static int g_res_i, g_win_i, g_aniso_i, g_kind_i;
+static int g_res_i, g_aniso_i, g_kind_i;
 static char g_folder_text[96]; /* where the game files are, for the Game page */
 
 static void size_names(void)
@@ -885,7 +1013,8 @@ static void quit_now(void);
 #define CHOICE(label, var, list, restart, fn, help) \
     {IT_CHOICE, label, &var, list, (int)(sizeof list / sizeof list[0]), restart, -1, fn, help}
 #define TOGGLE(label, var, restart, fn, help) {IT_TOGGLE, label, &var, ONOFF, 2, restart, -1, fn, help}
-#define INFO(label, value) {IT_INFO, label, NULL, NULL, 0, 0, -1, NULL, value}
+#define INFO(label, value) {IT_INFO, label, NULL, NULL, 0, 0, -1, NULL, value, {0, 0}}
+#define PAD(label, b1, b2, keys) {IT_INFO, label, NULL, NULL, 0, 0, -1, NULL, keys, {(b1) + 1, (b2) + 1}}
 
 static const char *const PAGE_TITLE[PAGE_COUNT] = {"PAUSED", "DISPLAY", "AUDIO", "GAME", "CONTROLS", "REPORT A BUG",
                                                    "QUIT"};
@@ -893,29 +1022,29 @@ static const char *const PAGE_TITLE[PAGE_COUNT] = {"PAUSED", "DISPLAY", "AUDIO",
 static Item g_main[] = {
     ACTION("Resume", -1, NULL, "Back to the game."),
     ACTION("Report a bug", PAGE_REPORT, NULL, "Save a capture of this moment with a note, for the developers."),
-    ACTION("Display", PAGE_DISPLAY, NULL, "Resolution, window, texture filtering, frame-rate counter."),
+    ACTION("Display", PAGE_DISPLAY, NULL, "Resolution, widescreen, full screen and more."),
     ACTION("Audio", PAGE_AUDIO, NULL, "Volume."),
     ACTION("Game", PAGE_GAME, NULL, "Language."),
     ACTION("Controls", PAGE_CONTROLS, NULL, "Controller and keyboard layout."),
     ACTION("Quit ReJet", PAGE_QUIT, NULL, "Close the game. Save in the game first."),
 };
 static Item g_display[] = {
-    CHOICE("Resolution", g_res_i, RES_NAMES, 0, changed_display,
-           "How sharp the game is drawn (the Xbox drew 640 x 480)."),
+    CHOICE("Internal resolution", g_res_i, RES_NAMES, 0, changed_display,
+           "How sharp the game looks. Higher is clearer but needs a faster graphics card."),
     CHOICE("Aspect ratio", g_settings.aspect, ASPECT_NAMES, 0, changed_display,
-           "Wider shapes show more at the sides (the HUD stretches with the screen)."),
-    CHOICE("Window size", g_win_i, WIN_NAMES, 0, changed_window,
-           "How big the window is (fitted to the screen). Full screen ignores it."),
-    TOGGLE("Full screen", g_settings.fullscreen, 0, NULL, "Borderless window over the whole monitor."),
-    CHOICE("Texture filtering", g_aniso_i, ANISO_NAMES, 0, changed_aniso, "Sharper textures at an angle."),
-    TOGGLE("Show FPS", g_settings.show_fps, 0, changed_save, "Frame-rate counter in the top left corner."),
+           "Wider shapes show more of the world at the sides."),
+    CHOICE("Window size", g_win_i, WIN_NAMES, 0, changed_window, "The size of the game window."),
+    TOGGLE("Full screen", g_settings.fullscreen, 0, NULL, "Fill the whole screen."),
+    CHOICE("Texture filtering", g_aniso_i, ANISO_NAMES, 0, changed_aniso,
+           "Keeps textures sharp on surfaces seen at an angle, like floors and roads."),
+    TOGGLE("Show FPS", g_settings.show_fps, 0, changed_save, "Shows the frame rate in the top left corner."),
     TOGGLE("VSync", g_settings.vsync, 0, changed_display,
-           "Also wait for the monitor. Off is smoother: the game already runs at 60."),
+           "Matches frames to your monitor to stop screen tearing. Off can feel more responsive."),
 };
 static Item g_audio[] = {
     {IT_SLIDER, "Volume", &g_settings.volume, NULL, 0, 0, -1, changed_save, "Master volume."},
     TOGGLE("Mute in background", g_settings.mute_in_background, 0, changed_save,
-           "Silent while another program has the focus."),
+           "No sound while you're using another window."),
 };
 static void setup_again(void);
 static Item g_game[] = {
@@ -924,15 +1053,15 @@ static Item g_game[] = {
     ACTION("Choose other game files", -2, setup_again,
            "Next time ReJet starts it asks for your disc image or game folder again."),
 };
-static Item g_controls[] = {
-    INFO("ReJet menu", "F1, or Back + Start"),
-    INFO("Move", "Left stick / WASD"),
-    INFO("Jump (A)", "A / Space or Z"),
-    INFO("Boost, spray (B)", "B / X"),
-    INFO("X / Y", "X, Y / C, V"),
-    INFO("Triggers", "LT, RT / Q, E"),
-    INFO("Start, Back", "Start, Back / Enter, Backspace"),
-    INFO("D-pad", "D-pad / arrow keys"),
+static Item g_controls[] = { /* controller icons, then the keyboard keys */
+    PAD("ReJet menu", BTN_BACK, BTN_START, "F1"),
+    INFO("Move", "Left stick  /  W A S D"),
+    PAD("Jump", BTN_A, -1, "Space or Z"),
+    PAD("Boost, spray", BTN_B, -1, "X"),
+    PAD("X / Y", BTN_X, BTN_Y, "C, V"),
+    PAD("Triggers", BTN_LT, BTN_RT, "Q, E"),
+    PAD("Start / Back", BTN_START, BTN_BACK, "Enter, Backspace"),
+    PAD("D-pad", BTN_DPAD, -1, "Arrow keys"),
     INFO("Screenshot, capture, marker", "F12, F11, F10"),
 };
 static Item g_report[] = {
@@ -1022,10 +1151,16 @@ static void handle(int ev, char ch)
     if (*sel >= n)
         *sel = 0;
     it = &items[*sel];
+    if (item_disabled(it) && (ev == IN_LEFT || ev == IN_RIGHT || ev == IN_OK))
+        return;
     switch (ev) {
     case IN_UP:
     case IN_DOWN:
-        *sel = (*sel + (ev == IN_UP ? n - 1 : 1)) % n;
+        for (int k = 0; k < n; k++) { /* the next row that applies */
+            *sel = (*sel + (ev == IN_UP ? n - 1 : 1)) % n;
+            if (!item_disabled(&items[*sel]))
+                break;
+        }
         if (abs(*sel - (int)(g_sel_pos + 0.5f)) > 1) /* wrapped round: jump, don't glide across */
             g_sel_pos = (float)*sel;
         g_t_sel = now_ms();
@@ -1213,7 +1348,7 @@ static void draw_menu(void)
             float rp = progress(g_t_page + 24.0 * i, 240);
             float rx = dx + 70 * (float)g_page_dir * (1 - ease_back(rp)), y = y0 + row * i;
             int on = i == sel;
-            DWORD fg = on ? C_BLACK : (it->type == IT_INFO ? C_GREY : C_WHITE);
+            DWORD fg = on ? C_BLACK : (it->type == IT_INFO || item_disabled(it) ? C_GREY : C_WHITE);
             char val[200] = "";
             g_fade = o * ease_out(rp);
             text(FONT_ITEM, 140 + rx, y, 0, fg, it->label);
@@ -1237,8 +1372,17 @@ static void draw_menu(void)
                          on && fmod(t, 1000.0) < 500.0 ? "_" : "");
                 break;
             case IT_INFO:
-                snprintf(val, sizeof val, "%s", it->help);
+                snprintf(val, sizeof val, it->pad[0] ? "/   %s" : "%s", it->help);
                 break;
+            }
+            if (it->type == IT_INFO && it->pad[0]) { /* controller icons left of the keys */
+                float h = 36, ix = 1170 + rx - text_width(FONT_SMALL, val) - 14;
+                for (int b = 1; b >= 0; b--)
+                    if (it->pad[b]) {
+                        ix -= button_width(it->pad[b] - 1, h);
+                        button_icon(it->pad[b] - 1, ix, y + 2, h);
+                        ix -= 8;
+                    }
             }
             if (it->restart)
                 restart_note = 1;
@@ -1268,10 +1412,26 @@ static void draw_menu(void)
     }
     {
         float dy = 80 * slide;
+        text(FONT_SMALL, canvas_right() - 24, 846 + dy, 2, C_GREY, "ReJet " REJET_BUILD); /* for bug reports */
         box(canvas_left(), 880 + dy, canvas_right(), 930 + dy, 0, C_SHADE);
-        text(FONT_SMALL, 640, 891 + dy, 1, C_WHITE,
-             g_text_focus ? "Type your note   Enter / Down  next   Esc  back"
-                          : "A / Enter  select     B / Esc  back     Left / Right  change     Start / F1  resume");
+        if (g_text_focus)
+            text(FONT_SMALL, 640, 891 + dy, 1, C_WHITE, "Type your note   Enter / Down  next   Esc  back");
+        else if (pad_connected()) { /* button icons with a controller, keys without one */
+            static const struct { int button; const char *label; } hints[] = {
+                {BTN_A, "Select"}, {BTN_B, "Back"}, {BTN_DPAD, "Change"}, {BTN_START, "Resume"}};
+            float h = 34, total = 0, x;
+            for (int i = 0; i < 4; i++)
+                total += button_width(hints[i].button, h) + 10 + text_width(FONT_SMALL, hints[i].label) + 36;
+            x = 640 - (total - 36) / 2;
+            for (int i = 0; i < 4; i++) {
+                x += button_icon(hints[i].button, x, 888 + dy, h) + 10;
+                text(FONT_SMALL, x, 891 + dy, 0, C_WHITE, hints[i].label);
+                x += text_width(FONT_SMALL, hints[i].label) + 36;
+            }
+        }
+        else
+            text(FONT_SMALL, 640, 891 + dy, 1, C_WHITE,
+                 "Enter  select     Esc  back     Left / Right  change     F1  resume");
     }
     g_fade = saved_fade;
 }
@@ -1359,10 +1519,62 @@ static void run_menu(void)
     log_printf("menu: closed\n");
 }
 
-void menu_frame(void)
+/* Start-up splash. The game's window stays black for about 6.5 s (frames 0 to ~390) while it
+ * boots, before its first logo. The ReJet logo covers that, with a moving stripe so it doesn't
+ * look frozen, and fades into the game's first picture: the game counts as started once it has
+ * drawn something on 10 frames in a row (shown at least 1.5 s; at most 30 s). The welcome
+ * message waits for the splash to end. */
+static double g_splash_start = -1.0, g_splash_end;
+static int g_splash_done, g_drawn_frames;
+
+static void draw_splash(unsigned long frame_draws)
+{
+    double t = now_ms();
+    float o, w, x, saved = g_fade;
+    if (g_splash_done)
+        return;
+    if (g_splash_start < 0)
+        g_splash_start = t;
+    if (!g_splash_end) {
+        g_drawn_frames = frame_draws ? g_drawn_frames + 1 : 0;
+        if ((g_drawn_frames >= 10 && t - g_splash_start > 1500) || t - g_splash_start > 30000)
+            g_splash_end = t;
+    }
+    o = ease_out(progress(g_splash_start, 400));
+    if (g_splash_end) {
+        o *= 1 - ease_out(progress(g_splash_end, 500));
+        if (progress(g_splash_end, 500) >= 1) {
+            g_splash_done = 1;
+            menu_toast("ReJet %s  -  menu: F1, or Back + Start on a controller", REJET_VERSION);
+            return;
+        }
+    }
+    g_fade = o;
+    box(canvas_left() - 10, -10, canvas_right() + 10, 970, 0, C_BLACK);
+    /* the logo (black lettering) on the menu's lime band, which slides in */
+    w = g_logo_px ? 96 * g_logo_aspect : 300;
+    {
+        float dx = -(1 - o) * 160, half = w / 2 + 70;
+        box(640 - half + dx, 380, 640 + half + dx, 500, 40, C_LIME);
+        box(640 - half + dx, 492, 640 + half - 30 + dx, 506, 40, C_PINK);
+        if (g_logo_px)
+            logo(640 - w / 2 + dx + 14, 392, 96, C_WHITE);
+        else
+            text(FONT_TITLE, 640 + dx, 395, 1, C_BLACK, "ReJet");
+    }
+    /* a lime stripe sweeping along a dark track */
+    box(490, 556, 790, 562, 4, 0xFF1E2E30u);
+    x = 490 + (float)fmod((t - g_splash_start) * 0.25, 360.0) - 60;
+    box(x < 490 ? 490 : x, 556, x + 60 > 790 ? 790 : x + 60, 562, 4, C_LIME);
+    text(FONT_SMALL, 640, 588, 1, C_GREY, REJET_BUILD);
+    g_fade = saved;
+}
+
+void menu_frame(unsigned long frame_draws)
 {
     if (!DEV || !ready())
         return;
+    draw_splash(frame_draws);
     if (g_swallow && !any_input_held())
         InterlockedExchange(&g_swallow, 0);
     {
@@ -1388,6 +1600,5 @@ void menu_init(const MenuHost *host)
         once = 1;
     }
     g_host = *host;
-    sync_from_settings();
-    menu_toast("ReJet menu: F1, or Back + Start on a controller");
+    sync_from_settings(); /* the welcome message comes when the splash ends */
 }

@@ -21,8 +21,10 @@ typedef struct MenuHost {
 void menu_init(const MenuHost *host);
 
 /* d3d.c, in Swap after screenshots and captures, before Present: opens the menu when asked
- * (then runs it here, the game paused, until it closes), and draws messages and the counter. */
-void menu_frame(void);
+ * (then runs it here, the game paused, until it closes), and draws messages and the counter.
+ * `frame_draws` (the game's draws this frame) ends the start-up splash once the game shows
+ * something. */
+void menu_frame(unsigned long frame_draws);
 
 /* Window thread: key and character messages. Returns 1 if the menu used the message. */
 int menu_window_message(UINT msg, WPARAM wp);

@@ -1,4 +1,4 @@
-/* User settings: rejet.ini next to ReJetLoader.exe. Every option defaults to the original
+/* User settings: rejet.ini next to ReJet.exe. Every option defaults to the original
  * behaviour, except where noted; environment variables (REJET_*) used for debugging still
  * override where they exist. The in-game ReJet menu (ui/menu.c) changes them and saves them
  * back, so they are kept between sessions. */

@@ -3,7 +3,7 @@
  * ReJet runs the original Default.xbe from an extracted copy of the disc. On a first start
  * (no files found) this screen asks for the disc image or an extracted folder, checks that its
  * Default.xbe is the PAL release ReJet supports (SHA-1, hle_xbe_supported), and extracts an
- * image into Game\ next to ReJetLoader.exe, with progress. The folder is remembered in
+ * image into Game\ next to ReJet.exe, with progress. The folder is remembered in
  * rejet.ini ([Game] Folder). The window is drawn with GDI in the ReJet menu's style (the game's
  * Direct3D device doesn't exist yet); mouse, keyboard and controller all work.
  *
@@ -26,6 +26,7 @@
 #include "settings.h"
 #include "ui/menu.h"
 #include "ui/setup.h"
+#include "version.gen.h"
 
 #define SECTOR 2048ull
 static const unsigned long long PARTITIONS[] = {0, 0x18300000ull, 0xFD90000ull, 0x2080000ull};
@@ -214,7 +215,7 @@ static UINT g_dpi = 96;
 
 static int S(int v) { return MulDiv(v, (int)g_dpi, 96); }
 
-static const WCHAR *const WELCOME_BUTTONS[] = {L"Choose disc image (.iso)", L"Choose extracted game folder", L"Quit"};
+static const WCHAR *const WELCOME_BUTTONS[] = {L"Choose disc image (.iso)", L"Choose game folder", L"Quit"};
 
 static void fail(const WCHAR *msg)
 {
@@ -235,15 +236,15 @@ static DWORD WINAPI extract_thread(void *arg)
 
     /* the right disc? */
     if (!xbe || xbe->size > (64u << 20)) {
-        fail(L"No default.xbe in this image. Is it an Xbox disc image of Jet Set Radio Future?");
+        fail(L"We couldn't find the game in that file. Make sure it's a Jet Set Radio Future Xbox disc image.");
         ok = 0;
     }
     else {
         unsigned char *data = (unsigned char *)malloc(xbe->size);
         if (!data || !iso_read(iso, iso->base + xbe->sector * SECTOR, data, xbe->size) ||
             !hle_xbe_supported(data, xbe->size)) {
-            fail(L"This image's default.xbe isn't the one ReJet supports: the PAL Xbox release of Jet Set Radio "
-                 L"Future (title 49470018). Other regions aren't supported yet.");
+            fail(L"That's not the version ReJet supports yet. ReJet needs the European (PAL) Xbox release of "
+                 L"Jet Set Radio Future.");
             ok = 0;
         }
         free(data);
@@ -257,7 +258,7 @@ static DWORD WINAPI extract_thread(void *arg)
     }
     if (ok && free_bytes.QuadPart < iso->total + (64ull << 20)) {
         WCHAR msg[256];
-        swprintf(msg, 256, L"Not enough free disk space: the game needs %.1f GB next to ReJetLoader.exe.",
+        swprintf(msg, 256, L"There isn't enough free space. The game needs about %.1f GB on the drive ReJet is on.",
                  (double)iso->total / (1 << 30));
         fail(msg);
         ok = 0;
@@ -283,7 +284,10 @@ static DWORD WINAPI extract_thread(void *arg)
             DWORD left = e->size;
             if (f == INVALID_HANDLE_VALUE) {
                 WCHAR msg[512];
-                swprintf(msg, 512, L"Could not write %s (error %lu).", out, GetLastError());
+                swprintf(msg, 512,
+                         L"ReJet couldn't save the game files (Windows error %lu). Try moving the ReJet folder "
+                         L"somewhere you can write to, like Documents.",
+                         GetLastError());
                 fail(msg);
                 ok = 0;
                 break;
@@ -291,7 +295,7 @@ static DWORD WINAPI extract_thread(void *arg)
             while (left && !g_cancel) {
                 DWORD n = left < sizeof buf ? left : (DWORD)sizeof buf, wrote = 0;
                 if (!iso_read(iso, at, buf, n) || !WriteFile(f, buf, n, &wrote, NULL) || wrote != n) {
-                    fail(L"Reading the image or writing the files failed. Is the image complete?");
+                    fail(L"Something went wrong while copying the game files. The disc image may be incomplete or damaged.");
                     ok = 0;
                     break;
                 }
@@ -339,7 +343,7 @@ static void choose_image(void)
             iso_close(iso);
             free(iso);
         }
-        fail(L"That file isn't an Xbox disc image ReJet can read (no XDVDFS file system found).");
+        fail(L"That file doesn't look like an Xbox disc image. Choose your Jet Set Radio Future .iso file.");
         return;
     }
     log_printf("setup: image with %u entries, %.1f MB\n", iso->n, (double)iso->total / (1 << 20));
@@ -367,8 +371,8 @@ static void choose_folder(void)
             g_state = ST_DONE;
         }
         else
-            fail(L"That folder has no default.xbe, or not the one ReJet supports: the PAL Xbox release of Jet Set "
-                 L"Radio Future (title 49470018).");
+            fail(L"We couldn't find the supported version of the game in that folder. ReJet needs the "
+                 L"European (PAL) Xbox release of Jet Set Radio Future.");
     }
     CoTaskMemFree(pidl);
 }
@@ -502,16 +506,15 @@ static void paint(HWND w)
 
     if (g_state == ST_WELCOME)
         text_at(dc,
-                L"Welcome. ReJet plays Jet Set Radio Future from your own copy of the game: choose your disc image "
-                L"(PAL Xbox release) and ReJet will check it and set it up, or choose a folder you've already "
-                L"extracted it to.",
+                L"Welcome to ReJet! Pick your Jet Set Radio Future disc image and ReJet will set everything up "
+                L"for you. Already extracted the game? Choose its folder instead.",
                 r, 17, 0, RGB(255, 255, 255), DT_LEFT | DT_WORDBREAK);
     else if (g_state == ST_WORKING) {
         WCHAR line[400];
         double f = g_total_bytes ? (double)g_done_bytes / (double)g_total_bytes : 0;
         RECT bar = {S(80), S(230), c.right - S(80), S(250)}, fillr = bar;
         HBRUSH b1 = CreateSolidBrush(RGB(40, 60, 62)), b2 = CreateSolidBrush(RGB(200, 240, 30));
-        swprintf(line, 400, L"Setting up the game files... %.0f%%", f * 100);
+        swprintf(line, 400, L"Setting things up... %.0f%%", f * 100);
         text_at(dc, line, r, 17, 0, RGB(255, 255, 255), DT_LEFT | DT_SINGLELINE);
         FillRect(dc, &bar, b1);
         fillr.right = bar.left + (LONG)((bar.right - bar.left) * f);
@@ -524,7 +527,7 @@ static void paint(HWND w)
     else if (g_state == ST_ERROR)
         text_at(dc, msg, r, 17, 0, RGB(255, 45, 138), DT_LEFT | DT_WORDBREAK);
     else
-        text_at(dc, L"All set. Starting the game...", r, 17, 0, RGB(255, 255, 255), DT_LEFT | DT_SINGLELINE);
+        text_at(dc, L"All set! Starting the game...", r, 17, 0, RGB(255, 255, 255), DT_LEFT | DT_SINGLELINE);
 
     for (int i = 0; i < button_count() && g_state != ST_DONE; i++) {
         RECT b = button_rect(c, i);
@@ -540,6 +543,7 @@ static void paint(HWND w)
     r.bottom = c.bottom - S(12);
     text_at(dc, L"Mouse, arrow keys + Enter, or a controller (d-pad + A)", r, 13, 0, RGB(154, 164, 164),
             DT_LEFT | DT_SINGLELINE);
+    text_at(dc, L"ReJet " TEXT(REJET_BUILD), r, 13, 0, RGB(154, 164, 164), DT_RIGHT | DT_SINGLELINE);
 
     BitBlt(wdc, 0, 0, c.right, c.bottom, dc, 0, 0, SRCCOPY);
     DeleteObject(back);
@@ -645,9 +649,12 @@ int setup_run(const WCHAR *exe_dir, WCHAR *folder, unsigned cap)
     wc.lpfnWndProc = setup_proc;
     wc.hInstance = GetModuleHandleW(NULL);
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+    wc.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1)); /* the exe's ReJet icon */
+    wc.hIconSm = (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                   GetSystemMetrics(SM_CYSMICON), 0);
     wc.lpszClassName = L"rejet_setup";
     RegisterClassExW(&wc);
-    g_wnd = CreateWindowW(L"rejet_setup", L"ReJet setup", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+    g_wnd = CreateWindowW(L"rejet_setup", L"ReJet - Jet Set Radio Future", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                           CW_USEDEFAULT, CW_USEDEFAULT, 100, 100, NULL, NULL, wc.hInstance, NULL);
     {
         typedef UINT(WINAPI * GetDpiForWindowFn)(HWND);

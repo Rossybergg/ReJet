@@ -1,0 +1,7 @@
+/* ReJet.exe resources: the icon (tools/art/make_icon.ps1) and the version. The icon has
+ * ID 1, the first, so Explorer shows it; the game and setup windows load it from the exe. */
+1 ICON "rejet.ico"
+
+#define REJET_FILE_DESC "ReJet - Jet Set Radio Future"
+#define REJET_FILE_NAME "ReJet.exe"
+#include "version.rc"

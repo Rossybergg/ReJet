@@ -31,6 +31,7 @@
 #include "settings.h"
 #include "tex.h"
 #include "ui/menu.h"
+#include "version.gen.h"
 #include "vsh.h"
 #include "xbox/xbox_d3d.h"
 #include "xboxkrnl_impl.h"
@@ -65,6 +66,7 @@ static UINT g_stream_stride;
 static UINT g_base_vertex;
 static int g_in_scene;
 static ULONG g_draws, g_skipped, g_untextured; /* per-600-frame counters for the log */
+static ULONG g_frame_draws;                   /* this frame's draws (the start-up splash) */
 static volatile LONG g_shot_request;          /* F12 */
 /* Manual-testing aids (docs/TESTING.md): F10 writes a numbered marker into the log; F11 captures
  * the next frame (screenshot, every draw with its state, the render-target textures) into
@@ -140,11 +142,14 @@ static DWORD WINAPI window_thread(void *arg)
     wc.lpfnWndProc = wnd_proc;
     wc.hInstance = GetModuleHandleW(NULL);
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+    wc.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1)); /* the exe's ReJet icon */
+    wc.hIconSm = (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                   GetSystemMetrics(SM_CYSMICON), 0);
     wc.lpszClassName = L"rejet";
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH); /* letterbox bars */
     RegisterClassExW(&wc);
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
-    g_wnd = CreateWindowW(L"rejet", L"Jet Set Radio Future (ReJet)  -  F1 menu   F10 mark   F11 capture   F12 screenshot",
+    g_wnd = CreateWindowW(L"rejet", L"ReJet - Jet Set Radio Future",
                           WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT,
                           CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, NULL, NULL, wc.hInstance, NULL);
     SetEvent(req->ready);
@@ -628,7 +633,8 @@ static void testing_hotkeys(void)
             FILE *f;
             snprintf(path, sizeof path, "%s\\note.txt", g_capture_dir);
             if ((f = fopen(path, "w")) != NULL) {
-                fprintf(f, "%s\nframe %lu, %04u-%02u-%02u %02u:%02u:%02u\n", g_capture_note, g_capture_frame, t.wYear,
+                fprintf(f, "%s\nReJet %s, frame %lu, %04u-%02u-%02u %02u:%02u:%02u\n", g_capture_note, REJET_BUILD,
+                        g_capture_frame, t.wYear,
                         t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
                 fclose(f);
             }
@@ -694,7 +700,8 @@ static DWORD XBAPI hle_D3DDevice_Swap(DWORD Flags)
     maybe_screenshot();
     testing_hotkeys(); /* before Present: the back buffer still holds this frame */
     if (g_dev) {
-        menu_frame(); /* messages and FPS on top; runs the menu (game paused) when opened */
+        menu_frame(g_frame_draws); /* splash, messages, FPS; runs the menu (game paused) when opened */
+        g_frame_draws = 0;
         present();
     }
     perf_end(PERF_PRESENT, t0);
@@ -1907,6 +1914,7 @@ static void capture_finish(void)
     g_capture_log = NULL;
     snprintf(path, sizeof path, "%s\\info.txt", g_capture_dir);
     if ((f = fopen(path, "w")) != NULL) {
+        fprintf(f, "ReJet %s\n", REJET_BUILD);
         fprintf(f, "frame %lu, vblank %lu, %lu draws\nrender %ux%u, game %ux%u\nrender targets: %u\n", g_frame,
                 vblank_now(), g_draws, g_hw, g_hh, g_xw, g_xh, g_rt_count);
         for (unsigned i = 0; i < g_rt_count; i++)
@@ -2287,6 +2295,7 @@ static int prepare_draw(void)
     draw_log();
     g_dl_verts = NULL;
     g_draws++;
+    g_frame_draws++;
     return 1;
 }
 

@@ -1,4 +1,4 @@
-/* ReJetLoader.exe: owns the XBE's address range.
+/* ReJet.exe (target ReJetLoader): owns the XBE's address range.
  *
  * Linked at /BASE:0x10000 /FIXED with a large reserved section, so Windows maps the whole
  * range 0x10000.. for this image at process creation, before heaps and mapped files can

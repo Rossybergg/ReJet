@@ -21,6 +21,7 @@
 #include "perf.h"
 #include "settings.h"
 #include "ui/setup.h"
+#include "version.gen.h"
 #include "xboxkrnl_impl.h"
 #include "xbox/xbe.h"
 
@@ -432,14 +433,20 @@ static int run(void *image_base, unsigned image_size)
     g_log = fopen(log_path, "w");
     {
         SYSTEMTIME t;
+        OSVERSIONINFOW os = {sizeof os};
+        typedef LONG(WINAPI * RtlGetVersionFn)(OSVERSIONINFOW *);
+        RtlGetVersionFn rtl = (RtlGetVersionFn)(void *)GetProcAddress(GetModuleHandleW(L"ntdll"), "RtlGetVersion");
         GetLocalTime(&t);
-        log_printf("rejet loader, session %04u-%02u-%02u %02u:%02u:%02u, image %08X size %08X\n", t.wYear, t.wMonth, t.wDay,
-                   t.wHour, t.wMinute, t.wSecond, (unsigned)(UINT_PTR)image_base, image_size);
+        if (rtl)
+            rtl(&os);
+        log_printf("ReJet %s (built %s), session %04u-%02u-%02u %02u:%02u:%02u, Windows %lu.%lu.%lu, image %08X size "
+                   "%08X\n", REJET_BUILD, REJET_BUILD_DATE, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond,
+                   os.dwMajorVersion, os.dwMinorVersion, os.dwBuildNumber, (unsigned)(UINT_PTR)image_base, image_size);
     }
 
     settings_load(); /* before the title runs (console settings), and for the game folder */
     argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    if (argc >= 2) { /* developers: ReJetLoader.exe <Default.xbe> [seconds, 0 = until closed] */
+    if (argc >= 2) { /* developers: ReJet.exe <Default.xbe> [seconds, 0 = until closed] */
         WideCharToMultiByte(CP_ACP, 0, argv[1], -1, xbe_path, MAX_PATH, NULL, NULL);
         if (argc >= 3)
             run_seconds = (unsigned)_wtoi(argv[2]);

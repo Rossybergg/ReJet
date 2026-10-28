@@ -1,0 +1,32 @@
+/* Version resource shared by rejet.dll and ReJet.exe (Properties > Details in Windows).
+ * Define REJET_FILE_DESC and REJET_FILE_NAME before including. Numbers from VERSION
+ * (tools/loader/gen_version.py). */
+#include <winver.h>
+#include "version.gen.h"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION REJET_VERSION_MAJOR, REJET_VERSION_MINOR, REJET_VERSION_PATCH, 0
+PRODUCTVERSION REJET_VERSION_MAJOR, REJET_VERSION_MINOR, REJET_VERSION_PATCH, 0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080904B0"
+        BEGIN
+            VALUE "ProductName", "ReJet"
+            VALUE "FileDescription", REJET_FILE_DESC
+            VALUE "OriginalFilename", REJET_FILE_NAME
+            VALUE "ProductVersion", REJET_BUILD
+            VALUE "FileVersion", REJET_BUILD
+            VALUE "Comments", "Jet Set Radio Future on Windows, from your own disc. Not affiliated with Sega."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0809, 1200
+    END
+END

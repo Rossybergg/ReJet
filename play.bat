@@ -1,10 +1,7 @@
 @echo off
-rem Run ReJet from the extracted disc in %USERPROFILE%\GameData\JSRF (tools\xiso.py extract-all).
-rem Optional first argument: seconds to run (default 30; 0 = until the window is closed).
-rem The log goes to build\loader\loader.log; set REJET_TRACE=1 to log every kernel call.
-setlocal
-set "SECS=%~1"
-if "%SECS%"=="" set SECS=30
-rem Run from build\loader so screenshots, captures and logs all land there (docs\TESTING.md).
+rem Run ReJet from the build (build\loader\ReJet.exe). Without arguments it uses the saved game
+rem folder ([Game] Folder in rejet.ini), else Game\ next to it, else the first-run setup.
+rem Developers: play.bat <path to default.xbe> [seconds to run, 0 = until the window is closed].
+rem The log, screenshots and captures go to build\loader (docs\TESTING.md).
 cd /d "%~dp0build\loader"
-.\ReJetLoader.exe "%USERPROFILE%\GameData\JSRF\default.xbe" %SECS%
+.\ReJet.exe %*

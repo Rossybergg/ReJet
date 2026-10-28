@@ -35,3 +35,9 @@ rejet.ini
 
 # Alpha builds (binaries, shared privately)
 /alpha/
+
+# Generated per build (version and commit)
+loader/core/version.gen.h
+
+# Release packages (tools/make_release.py)
+/dist/

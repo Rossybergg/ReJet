@@ -46,8 +46,10 @@ target_compile_options(rejet PRIVATE /W4 /arch:IA32)
 target_link_libraries(rejet PRIVATE shell32 gdi32 comdlg32 windowscodecs d3d9 d3dcompiler xinput xaudio2 ole32)
 target_link_options(rejet PRIVATE /LARGEADDRESSAWARE)
 
-# ReJetLoader.exe: tiny stub that owns 0x10000.. (see ReWhacked's docs/LOADER.md).
-add_executable(ReJetLoader stub/stub.c)
+# ReJet.exe (target ReJetLoader): tiny stub that owns 0x10000.. (see ReWhacked's docs/LOADER.md).
+add_executable(ReJetLoader stub/stub.c res/loader.rc)
+target_include_directories(ReJetLoader PRIVATE core)
+set_target_properties(ReJetLoader PROPERTIES OUTPUT_NAME ReJet) # players see ReJet.exe
 target_compile_options(ReJetLoader PRIVATE /W4 /GS-)
 target_link_libraries(ReJetLoader PRIVATE rejet kernel32)
 target_link_options(ReJetLoader PRIVATE

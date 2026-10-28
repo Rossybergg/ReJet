@@ -1,2 +1,6 @@
-/* The ReJet logo for the in-game menu (ui/menu.c). */
+/* rejet.dll resources: the ReJet logo for the in-game menu (ui/menu.c) and the version. */
 REJET_LOGO RCDATA "rejet_logo.png"
+
+#define REJET_FILE_DESC "ReJet loader library"
+#define REJET_FILE_NAME "rejet.dll"
+#include "version.rc"

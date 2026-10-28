@@ -12,6 +12,7 @@ set "PATH=%VS%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;%VS%\Commo
 cd /d "%~dp0..\.."
 python -I tools\loader\gen_kernel.py || exit /b 1
 python -I tools\loader\gen_xdk_addrs.py || exit /b 1
+python -I tools\loader\gen_version.py || exit /b 1
 rem fs_patches.gen.c needs orig\Default.xbe; it is committed, so only regenerate when present.
 if exist orig\Default.xbe python -I tools\loader\gen_fs_patches.py || exit /b 1
 cmake -S loader -B build\loader -G Ninja -DCMAKE_BUILD_TYPE=Release || exit /b 1
