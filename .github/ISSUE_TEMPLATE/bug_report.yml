@@ -1,0 +1,74 @@
+name: Bug report
+description: Something looks, sounds or plays wrong, or ReJet crashed.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing ReJet! The quickest way to get a bug fixed is to let ReJet capture it for you:
+
+        1. When the problem is on screen, open the **ReJet menu**: **F1** on the keyboard, or **Back + Start** on a controller.
+        2. Choose **Report a bug**, pick what went wrong and type a short note.
+        3. ReJet saves a folder in `captures\` next to `ReJet.exe` (it's named after the date and time). Right-click it → *Send to* → *Compressed (zipped) folder*.
+        4. Attach that zip and `loader.log` (also next to `ReJet.exe`) below.
+
+        If ReJet crashed or froze, `loader.log` is enough; logs from earlier sessions are in the `logs\` folder.
+        Please don't attach game files or disc images.
+  - type: input
+    id: version
+    attributes:
+      label: ReJet version
+      description: Shown at the bottom right of the ReJet menu, and on the first line of loader.log (for example 0.2.0+e907334).
+      placeholder: 0.2.0+e907334
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What went wrong?
+      options:
+        - Graphics
+        - Audio
+        - Controls
+        - Gameplay
+        - Crash or freeze
+        - Slow or stutter
+        - Setup (finding or extracting the game)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where and how?
+      description: Where in the game were you, and what were you doing? If you can make it happen again, the steps help a lot.
+      placeholder: |
+        Chapter 1, Shibuya-cho, after the second graffiti tag. Boosted into the wall by the bus stop.
+  - type: textarea
+    id: files
+    attributes:
+      label: Bug capture and log
+      description: Drag the zipped capture folder and loader.log here.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Your PC
+      description: Windows version and graphics card, and your ReJet display settings if it's a graphics problem.
+      placeholder: Windows 11, RTX 4070, 2560x1440 16:9 full screen
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send
+      options:
+        - label: I used **Report a bug** in the ReJet menu (or attached loader.log for a crash).
+        - label: I'm playing my own copy of the game, and I haven't attached any game files.
+          required: true

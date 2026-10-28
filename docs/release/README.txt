@@ -2,7 +2,9 @@ ReJet {version}
 Jet Set Radio Future on Windows, from your own disc.
 
 Not affiliated with Sega, Smilebit or Microsoft. No game data is included: you need your own
-disc image of the PAL Xbox release of Jet Set Radio Future.
+disc image of the European (PAL) Xbox release of Jet Set Radio Future.
+
+ReJet is free software under the GNU General Public License v3.0 (see LICENSE.txt).
 
 
 FIRST START

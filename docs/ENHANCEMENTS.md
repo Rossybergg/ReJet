@@ -34,8 +34,7 @@ What ReJet adds to the original game, done and planned. Every enhancement is a s
 ## Later / ideas
 
 - **HD texture packs** (local ComfyUI pipeline, never distributed), the same as ReWhacked's plan.
-- **Higher frame rate** (120/144 Hz) only if game logic can be separated from rendering (it looks frame-locked).
+- **Smooth motion above 60 fps** (experimental): the game's logic is locked to 60, so this would mean interpolating frames; see [HIGH_FRAME_RATE.md](HIGH_FRAME_RATE.md).
 - **Split screen with PC controllers**: JSRF has 2-4 player modes; XInput ×4 is already mapped.
 - **Graphics extras**: sharper shadows (stencil shadows are resolution-independent already), optional bloom-free/cleaner look, LOD distance.
 - **Quality of life**: pause when the window loses focus, quick restart of a level, speedrun timer overlay.
-- **Launcher for first-time setup**: for people pulling the public repo: find their disc image, check its hash, extract it. Settings stay in the in-game menu.

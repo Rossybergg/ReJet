@@ -227,3 +227,10 @@
 - **Controller button icons:** drawn into the menu's atlas at its scale (circle, pill and d-pad shapes with smooth edges, tinted: A/B/X/Y in Xbox colours, LB/RB/LT/RT pills, Menu and View symbols), used in the hint bar when a controller is connected (keyboard keys otherwise; `REJET_PAD_ICONS=1` forces them for tests) and on the Controls page next to the keyboard keys.
 - **High frame rate:** investigated and written up in `docs/HIGH_FRAME_RATE.md` (logic is frame-locked; a smooth-motion mode would mean interpolating draws between 60 Hz updates; recommended later as an experimental spike).
 - `make_release.py` assembles packages in `dist/.stage` and only refreshes the program files in `dist/ReJet-<version>/`, which may be a test install with game files and settings (the old version deleted that folder first).
+
+### 2026-10-28 — 0.2.1: licence, public-repo check, README
+
+- **Licence: GPL-3.0** (the user's choice): the official text from gnu.org as `LICENSE` (SHA-256 3972dc97...b36986, the standard file); release zips carry it as `LICENSE.txt`.
+- **Public-repo scan:** no personal paths, names or e-mail addresses in the 103 tracked files or the history (commit metadata aside: the author name, for the user to decide on); no game data (generated files and config hold addresses, hashes and metadata only). The supplied logo copy in the root is git-ignored.
+- **README rewritten** in a conversational voice: what ReJet is, screenshots, requirements, which game version (the European PAL Xbox release only, checked automatically), getting started, controls, the ReJet menu, what's new, what's planned, known issues, bug reports, building, licence, credits.
+- **Issue templates** (`.github/ISSUE_TEMPLATE/`): a bug-report form that walks people through Report a bug in the ReJet menu, then attaching the zipped capture and loader.log, with the ReJet version, category, PC and an own-copy check; an idea form; blank issues off. (The user lifted the `.github/` edit rule in `.claude/settings.json` for this.)

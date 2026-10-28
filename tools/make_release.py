@@ -6,7 +6,7 @@ The version comes from the VERSION file (semantic: MAJOR.MINOR.PATCH; bump it be
 release). Releases are built from a clean, committed tree so the build string
 (<version>+<commit>, shown in the ReJet menu and in every log and capture) identifies the exact
 code; --allow-dirty is for trying the packaging only. The package holds ReJet.exe,
-rejet.dll and a player readme; never game files (the script refuses anything else).
+rejet.dll, a player readme and the GPL-3.0 licence; never game files (the script refuses anything else).
 """
 import hashlib
 import shutil
@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build" / "loader"
-ALLOWED = {"ReJet.exe", "rejet.dll", "README.txt"}
+ALLOWED = {"ReJet.exe", "rejet.dll", "README.txt", "LICENSE.txt"}
 
 
 def git(*args):
@@ -48,6 +48,8 @@ def main():
         shutil.copy2(BUILD / f, stage / f)
     readme = (ROOT / "docs" / "release" / "README.txt").read_text(encoding="utf-8")
     (stage / "README.txt").write_text(readme.replace("{version}", build), encoding="utf-8", newline="\r\n")
+    licence = (ROOT / "LICENSE").read_text(encoding="utf-8")  # GPL-3.0 travels with the program
+    (stage / "LICENSE.txt").write_text(licence, encoding="utf-8", newline="\r\n")
 
     files = sorted(p.name for p in stage.iterdir())
     if set(files) != ALLOWED:

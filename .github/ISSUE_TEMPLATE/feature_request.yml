@@ -1,0 +1,20 @@
+name: Idea or request
+description: Suggest an enhancement or a change to ReJet.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Got an idea? Check the planned list in the README first; it might already be on the way.
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: Describe the feature or change, and why it would make ReJet better for you.
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Examples, screenshots or other games that do it well.

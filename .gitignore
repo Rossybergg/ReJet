@@ -41,3 +41,6 @@ loader/core/version.gen.h
 
 # Release packages (tools/make_release.py)
 /dist/
+
+# The logo as originally supplied (the copy that is used: loader/res/rejet_logo.png)
+/ReJet Logo.png
