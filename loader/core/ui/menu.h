@@ -37,3 +37,6 @@ int menu_is_open(void);
  * should see nothing (menu open, or buttons still held after closing it). While Back is held,
  * Start is kept for the menu. */
 int menu_filter_pad(unsigned port, unsigned short *buttons);
+
+/* The ReJet logo (premultiplied BGRA), for the setup screen. Returns 0 if there is none. */
+int menu_logo(const DWORD **px, UINT *w, UINT *h);

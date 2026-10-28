@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <d3d9.h>
 #include <intrin.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -78,6 +79,7 @@ static CRITICAL_SECTION g_capture_note_lock;
 
 static void present(void);
 static void change_display(void);
+static void widescreen_install(void);
 static D3DPRESENT_PARAMETERS g_hp; /* the device's present parameters (for ResetEx) */
 static void request_capture(const char *note);
 
@@ -352,6 +354,7 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
         menu_init(&host);
     }
     apply_window(); /* full screen, or the window sized for the display scaling */
+    widescreen_install();
     return S_OK;
 }
 
@@ -1053,6 +1056,7 @@ static IDirect3DVertexShader9 *g_vs_host[MAX_SHADERS];
 static IDirect3DVertexDeclaration9 *g_vs_vdecl[MAX_SHADERS];
 static BYTE g_vs_state[MAX_SHADERS]; /* 0 untried, 1 ready, 2 failed */
 static short g_vs_t0_off[MAX_SHADERS]; /* byte offset of the input copied to texcoord 0, or -1 */
+static BYTE g_vs_2d[MAX_SHADERS];      /* 2D program (screen positions, no viewport constants) */
 static unsigned g_vs_count, g_ps_count;
 
 /* Translate and compile program i (once), when the game creates it, so play never waits on the
@@ -1070,6 +1074,7 @@ static void ensure_vs(unsigned i)
     }
     t0 = perf_now();
     g_vs_host[i] = vsh_compile((IDirect3DDevice9 *)g_dev, g_vs_func[i], g_vs_decl[i], i);
+    g_vs_2d[i] = (BYTE)vsh_last_is_2d();
     {
         int reg = vsh_last_t0_input();
         g_vs_t0_off[i] = (short)(reg >= 0 ? vsh_input_offset(g_vs_decl[i], (unsigned)reg) : -1);
@@ -1510,15 +1515,62 @@ static D3DTRANSFORMSTATETYPE host_transform(DWORD s)
 }
 
 /* Widescreen (Hor+). The game draws for a 640x480 screen, which ReJet stretches over the
- * render target whatever its shape; the game's 3D projection fixes the horizontal field of view
- * (m00 = 1, 90 degrees) and derives the vertical one for 4:3 (m11 = 1.333). Dividing m00 by
- * k = (render aspect / 4:3) keeps the vertical view and shows more at the sides once
- * stretched. The engine builds the matrix in its own memory, reuses it for its vertex-program
- * constants and passes it here (from 0x154A39), so it is patched in place; a matrix already
- * patched is recognised, so repeated calls don't compound. 2D is stretched with the screen. */
+ * render target whatever its shape. Its projection fixes the horizontal field of view (m00 = 1;
+ * w' = tan(fov / 2) z) and derives the vertical one for 4:3 (m22 = 1.333); dividing m00 by
+ * k = (render aspect / 4:3) keeps the vertical view and shows more at the sides once stretched.
+ * The engine builds the matrix in its own memory (0x234F58, m00 never rewritten), reuses it for
+ * its vertex-program constants and passes it here (from 0x154A39), so it is patched in place; a
+ * matrix already patched is recognised, so repeated calls don't compound.
+ * The engine's own screen-space values (focal length 0x26B7A8.., used to anchor speech bubbles
+ * and the like) are left alone, so that 2D squeezed to 4:3 (squeeze_2d) still meets them. Its
+ * culling planes are not: the renderer's SetProjection (vtable 0x1E6BA0 slot 31, 0x154A40,
+ * stdcall this/fov/near/far; the vtable is its only reference) derives the horizontal ones
+ * (0x26B740..0x26B74C) from tan(fov / 2), so objects just outside the old 4:3 view were culled
+ * and popped in at the screen edges. After it runs, those planes are widened by k too. */
+#define RENDERER_SET_PROJECTION_SLOT 0x001E6C1Cu /* vtable 0x1E6BA0 + 31 * 4 */
+#define RENDERER_SET_PROJECTION 0x00154A40u
+#define CULL_PLANES 0x0026B740u /* 4 floats: 1 / cos, -tan, 1 / cos, tan (of fov / 2) */
+
+typedef void(XBAPI *SetProjectionFn)(void *self, int fov, float zn, float zf);
+static SetProjectionFn g_orig_set_projection;
+
 static float widescreen_k(void)
 {
     return ((float)g_hw / (float)g_hh) / (4.0f / 3.0f);
+}
+
+static void XBAPI hook_set_projection(void *self, int fov, float zn, float zf)
+{
+    float *planes = (float *)(UINT_PTR)CULL_PLANES, k = widescreen_k();
+    g_orig_set_projection(self, fov, zn, zf);
+    {
+        static int logged;
+        if (!logged++)
+            log_printf("widescreen: culling planes for fov %X: %.4f %.4f %.4f %.4f\n", fov, (double)planes[0],
+                       (double)planes[1], (double)planes[2], (double)planes[3]);
+    }
+    if (k > 1.01f) {
+        float t = planes[3] * k; /* tan of the wider half angle; the other term is 1 / cos */
+        planes[0] = planes[2] = sqrtf(1.0f + t * t);
+        planes[1] = -t;
+        planes[3] = t;
+    }
+}
+
+static void widescreen_install(void)
+{
+    void **slot = (void **)(UINT_PTR)RENDERER_SET_PROJECTION_SLOT;
+    DWORD old;
+    if (g_orig_set_projection)
+        return;
+    if ((UINT_PTR)*slot != RENDERER_SET_PROJECTION) {
+        log_printf("widescreen: renderer vtable not as expected; culling stays 4:3\n");
+        return;
+    }
+    g_orig_set_projection = (SetProjectionFn)*slot;
+    VirtualProtect(slot, sizeof *slot, PAGE_READWRITE, &old);
+    *slot = (void *)hook_set_projection;
+    VirtualProtect(slot, sizeof *slot, old, &old);
 }
 
 static D3DMATRIX *g_proj; /* the game's projection matrix (its memory), re-patched on display changes */
@@ -1526,8 +1578,8 @@ static D3DMATRIX *g_proj; /* the game's projection matrix (its memory), re-patch
 static void widescreen_projection(D3DMATRIX *m)
 {
     static float original, patched;
-    g_proj = m;
     float k = widescreen_k();
+    g_proj = m;
     if (m->_34 == 0.0f || m->_44 != 0.0f) /* not a perspective projection */
         return;
     if (m->_11 != patched || patched == 0.0f)
@@ -2298,6 +2350,87 @@ static int fvf_texcoord_offset(DWORD fvf, unsigned set)
  *   texture coordinates scaled to 0..1. Vertex programs get this through VSH_C_TEXSCALE; JSRF's
  *   boost draws its render target onto the screen with a fixed-function quad in texels, which
  *   read a single edge texel (a flat grey screen) until this. */
+/* Widescreen, 2D. The game's 640x480 screen space is stretched over a wide screen, while its
+ * perspective 3D is widened instead (widescreen_projection). UI drawn both ways (a dialogue box
+ * in 3D-projected pieces, its text in screen pixels; the game's menus) then disagreed, the text
+ * running out of its box. So 2D keeps 4:3 proportions in the middle of the screen, where
+ * projected UI lands too: each 2D draw's x is squeezed by 1/k around the centre, unless it
+ * spans the whole width (fades, cutscene bars, the boost and shadow overlays), which stays
+ * stretched. 2D here: pre-transformed vertices (screen pixels, squeezed on the CPU), 2D vertex
+ * programs (screen pixels in, the c[197] epilogue constant) and fixed-function geometry under
+ * an orthographic projection (a narrowed host projection). Render targets aren't touched. */
+static float g_squeeze = 1.0f; /* this draw's squeeze for pre-transformed vertices (1 = none) */
+
+static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
+{
+    float k = widescreen_k(), mn = 1e30f, mx = -1e30f, sq, c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    int fvf = !(g_cur_vs & 1), rhw = fvf && (g_cur_vs & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
+    g_squeeze = 1.0f;
+    if (!fvf) { /* 2D programs get the constant (reset for everything else) */
+        unsigned i = g_cur_vs >> 1;
+        if (k > 1.01f && !g_cur_rt && verts && i < MAX_SHADERS && g_vs_2d[i]) {
+            for (UINT v = first; v <= last; v++) {
+                float x = *(const float *)(verts + (SIZE_T)v * stride);
+                mn = x < mn ? x : mn;
+                mx = x > mx ? x : mx;
+            }
+            if (!(mn <= 2.0f && mx >= (float)g_xw - 2.0f))
+                c[0] = 1.0f / k;
+        }
+        IDirect3DDevice9Ex_SetVertexShaderConstantF(g_dev, VSH_C_2D, c, 1);
+        return;
+    }
+    if (rhw) {
+        if (k <= 1.01f || g_cur_rt || !verts)
+            return;
+        for (UINT v = first; v <= last; v++) {
+            float x = *(const float *)(verts + (SIZE_T)v * stride);
+            mn = x < mn ? x : mn;
+            mx = x > mx ? x : mx;
+        }
+        if (!(mn <= 2.0f && mx >= (float)g_xw - 2.0f))
+            g_squeeze = 1.0f / k;
+        return;
+    }
+    { /* fixed-function geometry: only orthographic projections are 2D */
+        D3DMATRIX p = g_xform[1], wvp;
+        const D3DMATRIX *w = &g_xform[6], *vw = &g_xform[0];
+        if (!(g_xform_set & 2))
+            return;
+        sq = 1.0f;
+        if (k > 1.01f && !g_cur_rt && verts && p._34 == 0.0f && p._44 != 0.0f) {
+            /* clip-space x extent through world, view and projection */
+            D3DMATRIX wv;
+            for (int r = 0; r < 4; r++)
+                for (int col = 0; col < 4; col++) {
+                    wv.m[r][col] = w->m[r][0] * vw->m[0][col] + w->m[r][1] * vw->m[1][col] +
+                                   w->m[r][2] * vw->m[2][col] + w->m[r][3] * vw->m[3][col];
+                }
+            for (int r = 0; r < 4; r++)
+                for (int col = 0; col < 4; col++)
+                    wvp.m[r][col] = wv.m[r][0] * p.m[0][col] + wv.m[r][1] * p.m[1][col] +
+                                    wv.m[r][2] * p.m[2][col] + wv.m[r][3] * p.m[3][col];
+            for (UINT v = first; v <= last; v++) {
+                const float *q = (const float *)(verts + (SIZE_T)v * stride);
+                float cx = q[0] * wvp._11 + q[1] * wvp._21 + q[2] * wvp._31 + wvp._41;
+                float cw = q[0] * wvp._14 + q[1] * wvp._24 + q[2] * wvp._34 + wvp._44;
+                float x = cw != 0.0f ? cx / cw : cx;
+                mn = x < mn ? x : mn;
+                mx = x > mx ? x : mx;
+            }
+            if (!(mn <= -0.98f && mx >= 0.98f))
+                sq = 1.0f / k;
+        }
+        if (sq != 1.0f) {
+            p._11 *= sq;
+            p._21 *= sq;
+            p._31 *= sq;
+            p._41 *= sq;
+        }
+        IDirect3DDevice9Ex_SetTransform(g_dev, D3DTS_PROJECTION, &p);
+    }
+}
+
 static const BYTE *fix_ff_vertices(const BYTE *verts, UINT first, UINT last, UINT stride)
 {
     static BYTE *buf;
@@ -2307,7 +2440,7 @@ static const BYTE *fix_ff_vertices(const BYTE *verts, UINT first, UINT last, UIN
     float su[4], sv[4];
     if (g_cur_vs & 1)
         return verts;
-    rhw = (g_cur_vs & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW && (g_tsx != 1.0f || g_tsy != 1.0f);
+    rhw = (g_cur_vs & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW && (g_tsx != 1.0f || g_tsy != 1.0f || g_squeeze != 1.0f);
     for (unsigned s = 0; s < 4; s++) {
         const XD3DPixelContainer *t = g_textures[s];
         const RenderTarget *r = t ? rt_find(t->Resource.Data) : NULL;
@@ -2342,7 +2475,9 @@ static const BYTE *fix_ff_vertices(const BYTE *verts, UINT first, UINT last, UIN
         BYTE *v = buf + (size_t)i * stride;
         memcpy(v, verts + (size_t)i * stride, stride);
         if (rhw) {
-            ((float *)v)[0] *= g_tsx;
+            float half = (float)g_hw * 0.5f; /* squeezing only happens on the back buffer */
+            ((float *)v)[0] = g_squeeze != 1.0f ? (((float *)v)[0] * g_tsx - half) * g_squeeze + half
+                                                : ((float *)v)[0] * g_tsx;
             ((float *)v)[1] *= g_tsy;
         }
         for (int k = 0; k < nscale; k++) {
@@ -2470,11 +2605,13 @@ static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, con
             if (idx[i] > hi)
                 hi = idx[i];
         }
+        squeeze_2d(verts, lo, hi, stride);
         verts = inset_quad_texcoords(verts, lo, hi, stride, group);
         verts = fix_ff_vertices(verts, lo, hi, stride);
         IDirect3DDevice9Ex_DrawIndexedPrimitiveUP(g_dev, pt, lo, hi - lo + 1, prims, idx, D3DFMT_INDEX16, verts, stride);
     }
     else {
+        squeeze_2d(verts, 0, count - 1, stride);
         verts = inset_quad_texcoords(verts, 0, count - 1, stride, group);
         verts = fix_ff_vertices(verts, 0, count - 1, stride);
         IDirect3DDevice9Ex_DrawPrimitiveUP(g_dev, pt, prims, verts, stride);

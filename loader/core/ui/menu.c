@@ -195,6 +195,18 @@ done:
         CoUninitialize();
 }
 
+/* The logo for the setup screen (ui/setup.c): premultiplied BGRA, loaded on first use. */
+int menu_logo(const DWORD **px, UINT *w, UINT *h)
+{
+    static int tried;
+    if (!tried++)
+        load_logo();
+    *px = g_logo_px;
+    *w = g_logo_w;
+    *h = g_logo_h;
+    return g_logo_px != NULL;
+}
+
 /* Box-filter the logo down to w x h (premultiplied, so edges stay clean). */
 static void scale_logo(DWORD *dst, UINT w, UINT h, UINT pitch)
 {
@@ -787,6 +799,7 @@ static const char *const REPORT_KINDS[] = {"Graphics", "Audio", "Controls", "Gam
 static const char *const ONOFF[] = {"Off", "On"};
 
 static int g_res_i, g_win_i, g_aniso_i, g_kind_i;
+static char g_folder_text[96]; /* where the game files are, for the Game page */
 
 static void size_names(void)
 {
@@ -809,8 +822,25 @@ static int index_of(const int *list, int n, int v)
     return best;
 }
 
+static void setup_again(void)
+{
+    settings_set_game_folder(L"");
+    log_printf("menu: game files will be asked for at the next start\n");
+    menu_toast("ReJet will ask for your game files next time it starts");
+}
+
 static void sync_from_settings(void)
 {
+    {
+        WCHAR folder[MAX_PATH];
+        char narrow[MAX_PATH * 2];
+        size_t len;
+        settings_game_folder(folder, MAX_PATH);
+        WideCharToMultiByte(CP_UTF8, 0, folder[0] ? folder : L"(given on the command line)", -1, narrow,
+                            sizeof narrow, NULL, NULL);
+        len = strlen(narrow);
+        snprintf(g_folder_text, sizeof g_folder_text, "%s%s", len > 60 ? "..." : "", narrow + (len > 60 ? len - 60 : 0));
+    }
     size_names();
     g_res_i = index_of(RES_H, (int)(sizeof RES_H / sizeof RES_H[0]), g_settings.height);
     g_win_i = index_of(WIN_H, (int)(sizeof WIN_H / sizeof WIN_H[0]), g_settings.window_height);
@@ -887,8 +917,12 @@ static Item g_audio[] = {
     TOGGLE("Mute in background", g_settings.mute_in_background, 0, changed_save,
            "Silent while another program has the focus."),
 };
+static void setup_again(void);
 static Item g_game[] = {
     CHOICE("Language", g_settings.language, LANG_NAMES, 1, changed_save, "Text and voice language."),
+    {IT_INFO, "Game files", NULL, NULL, 0, 0, -1, NULL, g_folder_text},
+    ACTION("Choose other game files", -2, setup_again,
+           "Next time ReJet starts it asks for your disc image or game folder again."),
 };
 static Item g_controls[] = {
     INFO("ReJet menu", "F1, or Back + Start"),
@@ -1349,7 +1383,8 @@ void menu_init(const MenuHost *host)
     if (!once) {
         InitializeCriticalSection(&g_toast_lock);
         InitializeCriticalSection(&g_event_lock);
-        load_logo();
+        if (!g_logo_px)
+            load_logo();
         once = 1;
     }
     g_host = *host;

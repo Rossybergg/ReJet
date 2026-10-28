@@ -3,6 +3,8 @@
  * override where they exist. The in-game ReJet menu (ui/menu.c) changes them and saves them
  * back, so they are kept between sessions. */
 #pragma once
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 
 /* Game language index (docs/SUBSYSTEMS.md): what the console's language setting maps to. */
 enum { GAME_LANG_JAPANESE = 0, GAME_LANG_ENGLISH = 1, GAME_LANG_FRENCH = 2, GAME_LANG_GERMAN = 3, GAME_LANG_SPANISH = 4, GAME_LANG_ITALIAN = 5 };
@@ -36,3 +38,7 @@ void settings_load(void);
 
 /* Write the current settings back to rejet.ini. */
 void settings_save(void);
+
+/* [Game] Folder: where the game's files are (the folder with default.xbe), or "" if not set up. */
+void settings_game_folder(WCHAR *out, unsigned cap);
+void settings_set_game_folder(const WCHAR *folder);

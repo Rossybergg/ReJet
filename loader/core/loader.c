@@ -13,12 +13,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 #include "emu_thread.h"
 #include "hle.h"
 #include "kernel.h"
 #include "perf.h"
 #include "settings.h"
+#include "ui/setup.h"
 #include "xboxkrnl_impl.h"
 #include "xbox/xbe.h"
 
@@ -435,14 +437,30 @@ static int run(void *image_base, unsigned image_size)
                    t.wHour, t.wMinute, t.wSecond, (unsigned)(UINT_PTR)image_base, image_size);
     }
 
+    settings_load(); /* before the title runs (console settings), and for the game folder */
     argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    if (argc < 2) {
-        log_printf("usage: ReJetLoader.exe <path to Default.xbe>\n");
-        return 2;
+    if (argc >= 2) { /* developers: ReJetLoader.exe <Default.xbe> [seconds, 0 = until closed] */
+        WideCharToMultiByte(CP_ACP, 0, argv[1], -1, xbe_path, MAX_PATH, NULL, NULL);
+        if (argc >= 3)
+            run_seconds = (unsigned)_wtoi(argv[2]);
     }
-    WideCharToMultiByte(CP_ACP, 0, argv[1], -1, xbe_path, MAX_PATH, NULL, NULL);
-    if (argc >= 3)
-        run_seconds = (unsigned)_wtoi(argv[2]);
+    else { /* players: the saved game folder, Game\ next to the exe, or the setup screen */
+        WCHAR wexe[MAX_PATH], folder[MAX_PATH], *slash;
+        GetModuleFileNameW(NULL, wexe, MAX_PATH);
+        if ((slash = wcsrchr(wexe, L'\\')) != NULL)
+            *slash = 0;
+        settings_game_folder(folder, MAX_PATH);
+        if (!setup_folder_ok(folder)) {
+            swprintf(folder, MAX_PATH, L"%s\\Game", wexe);
+            if (setup_folder_ok(folder))
+                settings_set_game_folder(folder);
+            else if (!setup_run(wexe, folder, MAX_PATH))
+                return 0;
+        }
+        WideCharToMultiByte(CP_ACP, 0, folder, -1, xbe_path, MAX_PATH - 16, NULL, NULL);
+        strcat_s(xbe_path, MAX_PATH, "\\default.xbe");
+        run_seconds = 0;
+    }
     log_printf("xbe: %s\n", xbe_path);
 
     file = read_file(xbe_path, &file_size);
@@ -454,7 +472,6 @@ static int run(void *image_base, unsigned image_size)
         return 2;
     if (!emu_fs_init())
         return 2;
-    settings_load(); /* before the title runs: console settings come from it */
     if (!hle_apply(file, file_size))
         return 2;
     kernel_ticker_start();

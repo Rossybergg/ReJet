@@ -81,6 +81,13 @@ static unsigned patch_table(const HlePatch *t, unsigned count)
     return count;
 }
 
+int hle_xbe_supported(const unsigned char *xbe_file, unsigned long xbe_size)
+{
+    UCHAR digest[20];
+    sha1_digest(xbe_file, xbe_size, digest);
+    return !memcmp(digest, XBE_SHA1, sizeof digest);
+}
+
 int hle_apply(const unsigned char *xbe_file, unsigned long xbe_size)
 {
     UCHAR digest[20];

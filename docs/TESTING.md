@@ -5,6 +5,7 @@ How to play-test and report problems so they can be found and fixed quickly. Eve
 ## Starting the game
 
 - `play.bat 0` runs the game until you close the window (`play.bat` alone stops after 30 seconds).
+- Or run `ReJetLoader.exe` without arguments: it uses the saved game folder (`[Game] Folder` in `rejet.ini`), else `Game\` next to it, else shows the first-run setup. `REJET_SETUP_IMAGE=<iso>` starts the setup with that image (tests).
 - Controller: an Xbox-style pad on port 1. Keyboard (when no pad is plugged in): WASD steer, Space or Z = A, X or Esc = B, C = X, V = Y, Q and E = triggers, Enter = Start, Backspace = Back, arrow keys = d-pad.
 - Saves are kept in `%LOCALAPPDATA%\rejet\hdd\Partition1\UDATA\49470018\` and survive restarts and rebuilds.
 

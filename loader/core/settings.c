@@ -86,3 +86,16 @@ void settings_save(void)
     PUT("Console", "Language", language);
 #undef PUT
 }
+
+void settings_game_folder(WCHAR *out, unsigned cap)
+{
+    out[0] = 0;
+    if (g_path[0])
+        GetPrivateProfileStringW(L"Game", L"Folder", L"", out, cap, g_path);
+}
+
+void settings_set_game_folder(const WCHAR *folder)
+{
+    if (g_path[0])
+        WritePrivateProfileStringW(L"Game", L"Folder", folder, g_path);
+}
