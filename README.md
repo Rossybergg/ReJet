@@ -1,4 +1,4 @@
-<p align="center"><img src="loader/res/rejet_logo.png" alt="ReJet" width="520"></p>
+<p align="center"><img src="docs/images/banner.png" alt="ReJet" width="600"></p>
 
 <p align="center"><b>Jet Set Radio Future on your PC, from your own disc, with a few modern upgrades.</b></p>
 
