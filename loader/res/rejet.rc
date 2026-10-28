@@ -1,0 +1,2 @@
+/* The ReJet logo for the in-game menu (ui/menu.c). */
+REJET_LOGO RCDATA "rejet_logo.png"

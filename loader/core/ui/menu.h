@@ -14,6 +14,7 @@ typedef struct MenuHost {
     void (*present)(void);                     /* show the back buffer */
     void (*request_capture)(const char *note); /* bug capture of the next frame, with a note */
     void (*apply_window)(void);                /* window size or full screen changed */
+    void (*change_display)(void);              /* resolution or VSync changed (device reset) */
 } MenuHost;
 
 /* d3d.c: once the device exists. */

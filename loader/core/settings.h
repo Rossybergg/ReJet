@@ -10,7 +10,7 @@ enum { GAME_LANG_JAPANESE = 0, GAME_LANG_ENGLISH = 1, GAME_LANG_FRENCH = 2, GAME
 typedef struct Settings {
     /* [Display] */
     int width, height; /* render resolution (default 1280x960; the Xbox renders 640x480) */
-    int window_scale;  /* window size in percent of the render size (default 100) */
+    int window_height; /* window height in Windows' scaled pixels (default 960; 4:3, fitted to the screen) */
     int vsync;         /* 1 = also wait for the monitor's refresh when presenting (default 0: the emulated
                           vblank already paces the game at 60 Hz, and the extra wait could halve the frame rate) */
     int fullscreen;    /* 1 = borderless window over the whole monitor */

@@ -13,8 +13,11 @@
 #include <windows.h>
 #include <d3d9.h>
 #include <Xinput.h>
+#include <wincodec.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "kernel.h"
@@ -41,6 +44,42 @@ static DWORD with_alpha(DWORD c, float a)
     return (c & 0x00FFFFFFu) | ca << 24;
 }
 
+/* ------------------------------------------------------------------ animation helpers */
+
+static double now_ms(void)
+{
+    static LARGE_INTEGER f;
+    LARGE_INTEGER t;
+    if (!f.QuadPart)
+        QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&t);
+    return (double)t.QuadPart * 1000.0 / (double)f.QuadPart;
+}
+
+static float clamp01(float t)
+{
+    return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+
+/* 0..1 progress of an animation that started at `start` and lasts `ms` */
+static float progress(double start, double ms)
+{
+    return clamp01((float)((now_ms() - start) / ms));
+}
+
+static float ease_out(float t) /* fast, then settles */
+{
+    t = 1 - clamp01(t);
+    return 1 - t * t * t;
+}
+
+static float ease_back(float t) /* overshoots a little, then settles */
+{
+    const float c1 = 1.70158f, c3 = c1 + 1;
+    t = clamp01(t) - 1;
+    return 1 + c3 * t * t * t + c1 * t * t;
+}
+
 /* ------------------------------------------------------------------ font atlas */
 
 enum { FONT_TITLE, FONT_ITEM, FONT_SMALL, FONT_COUNT };
@@ -61,6 +100,124 @@ static IDirect3DTexture9 *g_atlas;
 static UINT g_bw, g_bh;             /* back-buffer size the atlas was built for */
 static float g_scale, g_ox;         /* canvas -> back buffer: x' = g_ox + x * g_scale */
 
+/* ------------------------------------------------------------------ logo */
+
+/* The ReJet logo: rejet_logo.png next to ReJetLoader.exe, else the copy built into rejet.dll
+ * (resource REJET_LOGO, loader/res/), decoded with Windows Imaging Component. Without one the
+ * menu writes "ReJet" in the title font. */
+static DWORD *g_logo_px; /* premultiplied BGRA, original size */
+static UINT g_logo_w, g_logo_h;
+static float g_lu0, g_lv0, g_lu1, g_lv1, g_logo_aspect; /* where it sits in the atlas */
+
+static void load_logo(void)
+{
+    IWICImagingFactory *wic = NULL;
+    IWICBitmapDecoder *dec = NULL;
+    IWICBitmapFrameDecode *frame = NULL;
+    IWICFormatConverter *conv = NULL;
+    IWICStream *stream = NULL;
+    WCHAR path[MAX_PATH], *slash;
+    HRESULT hr, co = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
+    if (FAILED(CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory,
+                                (void **)&wic)))
+        goto done;
+    hr = E_FAIL;
+    if (GetModuleFileNameW(NULL, path, MAX_PATH) && (slash = wcsrchr(path, L'\\')) != NULL) {
+        wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"rejet_logo.png");
+        if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
+            hr = IWICImagingFactory_CreateDecoderFromFilename(wic, path, NULL, GENERIC_READ,
+                                                              WICDecodeMetadataCacheOnDemand, &dec);
+    }
+    if (FAILED(hr)) { /* built in */
+        HMODULE self = NULL;
+        HRSRC res;
+        HGLOBAL mem;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)(void *)load_logo, &self);
+        if (!self || !(res = FindResourceW(self, L"REJET_LOGO", (LPCWSTR)RT_RCDATA)) ||
+            !(mem = LoadResource(self, res)) ||
+            FAILED(IWICImagingFactory_CreateStream(wic, &stream)) ||
+            FAILED(IWICStream_InitializeFromMemory(stream, (BYTE *)LockResource(mem), SizeofResource(self, res))) ||
+            FAILED(IWICImagingFactory_CreateDecoderFromStream(wic, (IStream *)stream, NULL,
+                                                              WICDecodeMetadataCacheOnDemand, &dec)))
+            goto done;
+    }
+    if (FAILED(IWICBitmapDecoder_GetFrame(dec, 0, &frame)) ||
+        FAILED(IWICImagingFactory_CreateFormatConverter(wic, &conv)) ||
+        FAILED(IWICFormatConverter_Initialize(conv, (IWICBitmapSource *)frame, &GUID_WICPixelFormat32bppPBGRA,
+                                              WICBitmapDitherTypeNone, NULL, 0.0, WICBitmapPaletteTypeCustom)) ||
+        FAILED(IWICBitmapSource_GetSize((IWICBitmapSource *)conv, &g_logo_w, &g_logo_h)) || !g_logo_w ||
+        !g_logo_h || g_logo_w > 8192 || g_logo_h > 8192)
+        goto done;
+    g_logo_px = (DWORD *)malloc((size_t)g_logo_w * g_logo_h * 4);
+    if (g_logo_px && FAILED(IWICBitmapSource_CopyPixels((IWICBitmapSource *)conv, NULL, g_logo_w * 4,
+                                                        g_logo_w * g_logo_h * 4, (BYTE *)g_logo_px))) {
+        free(g_logo_px);
+        g_logo_px = NULL;
+    }
+    if (g_logo_px) { /* trim fully transparent edges */
+        UINT x0 = g_logo_w, y0 = g_logo_h, x1 = 0, y1 = 0;
+        for (UINT y = 0; y < g_logo_h; y++)
+            for (UINT x = 0; x < g_logo_w; x++)
+                if ((g_logo_px[y * g_logo_w + x] >> 24) > 8) {
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+        if (x1 >= x0 && y1 >= y0) {
+            UINT w = x1 - x0 + 1, h = y1 - y0 + 1;
+            for (UINT y = 0; y < h; y++)
+                memmove(g_logo_px + (size_t)y * w, g_logo_px + (size_t)(y + y0) * g_logo_w + x0, (size_t)w * 4);
+            log_printf("menu: logo %ux%u (trimmed from %ux%u)\n", w, h, g_logo_w, g_logo_h);
+            g_logo_w = w;
+            g_logo_h = h;
+        }
+        else {
+            free(g_logo_px);
+            g_logo_px = NULL;
+        }
+    }
+done:
+    if (conv)
+        IWICFormatConverter_Release(conv);
+    if (frame)
+        IWICBitmapFrameDecode_Release(frame);
+    if (dec)
+        IWICBitmapDecoder_Release(dec);
+    if (stream)
+        IWICStream_Release(stream);
+    if (wic)
+        IWICImagingFactory_Release(wic);
+    if (SUCCEEDED(co))
+        CoUninitialize();
+}
+
+/* Box-filter the logo down to w x h (premultiplied, so edges stay clean). */
+static void scale_logo(DWORD *dst, UINT w, UINT h, UINT pitch)
+{
+    for (UINT y = 0; y < h; y++) {
+        UINT sy0 = y * g_logo_h / h, sy1 = (y + 1) * g_logo_h / h;
+        if (sy1 <= sy0)
+            sy1 = sy0 + 1;
+        for (UINT x = 0; x < w; x++) {
+            UINT sx0 = x * g_logo_w / w, sx1 = (x + 1) * g_logo_w / w, n = 0, acc[4] = {0, 0, 0, 0};
+            if (sx1 <= sx0)
+                sx1 = sx0 + 1;
+            for (UINT sy = sy0; sy < sy1 && sy < g_logo_h; sy++)
+                for (UINT sx = sx0; sx < sx1 && sx < g_logo_w; sx++, n++) {
+                    DWORD p = g_logo_px[sy * g_logo_w + sx];
+                    for (int k = 0; k < 4; k++)
+                        acc[k] += (p >> (8 * k)) & 0xFF;
+                }
+            if (!n)
+                n = 1;
+            dst[y * pitch + x] = (acc[0] / n) | (acc[1] / n) << 8 | (acc[2] / n) << 16 | (acc[3] / n) << 24;
+        }
+    }
+}
+
 static int build_atlas(UINT bw, UINT bh)
 {
     static const struct { const WCHAR *face; int size, weight, italic; } fonts[FONT_COUNT] = {
@@ -72,7 +229,9 @@ static int build_atlas(UINT bw, UINT bh)
     BITMAPINFO bi;
     DWORD *bits = NULL;
     HBITMAP bm;
-    int x = 0, y = 0, row = 0;
+    int x = 0, y = 0, row = 0, logo_top = ATLAS - 8;
+    UINT lw = 0, lh = 0;
+    DWORD *logo = NULL;
     D3DLOCKED_RECT lr;
 
     if (g_atlas) {
@@ -100,6 +259,22 @@ static int build_atlas(UINT bw, UINT bh)
     SelectObject(dc, bm);
     SetTextColor(dc, RGB(255, 255, 255));
     SetBkMode(dc, TRANSPARENT);
+    if (g_logo_px) { /* the logo goes in the bottom-left of the atlas, at the size it is drawn */
+        lh = (UINT)(90.0f * g_scale + 0.5f); /* a little above the drawn size (76) */
+        if (lh > g_logo_h)
+            lh = g_logo_h;
+        lw = (UINT)((float)lh * (float)g_logo_w / (float)g_logo_h + 0.5f);
+        if (lw > ATLAS - 16) {
+            lw = ATLAS - 16;
+            lh = (UINT)((float)lw * (float)g_logo_h / (float)g_logo_w + 0.5f);
+        }
+        logo_top = ATLAS - 8 - (int)lh;
+        g_lu0 = 0.5f / ATLAS;
+        g_lv0 = ((float)logo_top + 0.5f) / ATLAS;
+        g_lu1 = ((float)lw - 0.5f) / ATLAS;
+        g_lv1 = ((float)(logo_top + (int)lh) - 0.5f) / ATLAS;
+        g_logo_aspect = (float)g_logo_w / (float)g_logo_h;
+    }
     for (int f = 0; f < FONT_COUNT; f++) {
         int px = (int)((float)fonts[f].size * g_scale + 0.5f);
         HFONT h = CreateFontW(-px, 0, 0, 0, fonts[f].weight, fonts[f].italic, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS,
@@ -121,7 +296,7 @@ static int build_atlas(UINT bw, UINT bh)
                 y += row + 2;
                 row = 0;
             }
-            if (y + tm.tmHeight > ATLAS - 8)
+            if (y + tm.tmHeight > logo_top - 4)
                 break;
             TextOutW(dc, x + 1, y, &wc, 1);
             g->u0 = (float)x / ATLAS;
@@ -155,6 +330,19 @@ static int build_atlas(UINT bw, UINT bh)
             for (int i = 0; i < ATLAS; i++) /* coverage (grey text) -> alpha on white */
                 dst[i] = (src[i] & 0xFF) << 24 | 0x00FFFFFFu;
         }
+        if (lw && (logo = (DWORD *)malloc((size_t)lw * lh * 4)) != NULL) {
+            scale_logo(logo, lw, lh, lw);
+            for (UINT j = 0; j < lh; j++) {
+                DWORD *dst = (DWORD *)((BYTE *)lr.pBits + (size_t)(logo_top + (int)j) * lr.Pitch);
+                for (UINT i = 0; i < lw; i++) { /* premultiplied -> straight alpha */
+                    DWORD p = logo[j * lw + i], a = p >> 24;
+                    DWORD r = a ? ((p >> 16) & 0xFF) * 255 / a : 0, g = a ? ((p >> 8) & 0xFF) * 255 / a : 0,
+                          b = a ? (p & 0xFF) * 255 / a : 0;
+                    dst[i] = a << 24 | (r > 255 ? 255 : r) << 16 | (g > 255 ? 255 : g) << 8 | (b > 255 ? 255 : b);
+                }
+            }
+            free(logo);
+        }
         IDirect3DTexture9_UnlockRect(g_atlas, 0);
     }
     DeleteObject(bm);
@@ -174,7 +362,7 @@ typedef struct Vertex {
 static Vertex g_v[MAX_VERTS];
 static int g_nv;
 static IDirect3DStateBlock9 *g_state;
-static float g_fade = 1.0f; /* menu opening animation */
+static float g_fade = 1.0f; /* opacity for what is drawn next (animations) */
 
 static float X(float x) { return g_ox + x * g_scale; }
 static float Y(float y) { return y * g_scale; }
@@ -234,6 +422,16 @@ static void text(int font, float x, float y, int align, DWORD c, const char *s)
             px += g->adv;
         }
     }
+}
+
+/* The logo, `h` canvas units tall, top left at (x, y); returns its width. */
+static float logo(float x, float y, float h, DWORD c)
+{
+    float w = h * g_logo_aspect;
+    if (!g_logo_px || g_lu1 <= g_lu0)
+        return 0;
+    quad_px(X(x), Y(y), X(x + w), Y(y + h), 0, with_alpha(c, g_fade), g_lu0, g_lv0, g_lu1, g_lv1);
+    return w;
 }
 
 static void flush(void)
@@ -349,13 +547,14 @@ static void draw_toasts(void)
     for (int i = 0; i < g_ntoasts; i++) {
         float age = (float)(now - g_toasts[i].at), a = age < 150 ? age / 150 : age > 2500 ? (3000 - age) / 500 : 1;
         float w = text_width(FONT_SMALL, g_toasts[i].text);
+        float dx = -(w + 120) * (1 - ease_out(age / 260)); /* slides in from the left */
         float saved = g_fade;
         g_fade = a;
-        box(24, y, 24 + w + 44, y + 40, 10, C_PANEL);
-        box(24, y, 32, y + 40, 10, C_LIME);
-        text(FONT_SMALL, 46, y + 6, 0, C_WHITE, g_toasts[i].text);
+        box(24 + dx, y, 24 + dx + w + 44, y + 40, 10, C_PANEL);
+        box(24 + dx, y, 32 + dx, y + 40, 10, C_LIME);
+        text(FONT_SMALL, 46 + dx, y + 6, 0, C_WHITE, g_toasts[i].text);
         g_fade = saved;
-        y += 48;
+        y += 48 * (age < 200 ? ease_out(age / 200) : 1);
     }
     LeaveCriticalSection(&g_toast_lock);
 }
@@ -551,7 +750,7 @@ typedef struct Item {
     const char *const *choices;
     int nchoices;
     int restart;           /* applies on the next start */
-    int target;            /* action: page to open, or -1 */
+    int target;            /* action: page to open, -1 close the menu, -2 back */
     void (*changed)(void); /* after a change */
     const char *help;
 } Item;
@@ -559,13 +758,19 @@ typedef struct Item {
 static int g_page, g_sel[PAGE_COUNT];
 static int g_stack[8], g_depth;
 
+/* Animation state (times from now_ms). */
+static double g_t_open, g_t_close, g_t_page, g_t_sel, g_t_value;
+static int g_page_dir = 1, g_value_dir, g_closing;
+static float g_sel_pos; /* the selection bar's row, gliding towards the selected one */
+
 /* Choice lists and the indices the menu edits (synced with g_settings). */
 static const int RES[][2] = {{640, 480}, {960, 720}, {1280, 960}, {1440, 1080}, {1600, 1200},
                              {1920, 1440}, {2560, 1920}, {2880, 2160}};
 static const char *const RES_NAMES[] = {"640 x 480", "960 x 720", "1280 x 960", "1440 x 1080", "1600 x 1200",
                                         "1920 x 1440", "2560 x 1920", "2880 x 2160"};
-static const int SCALES[] = {50, 75, 100, 125, 150, 200};
-static const char *const SCALE_NAMES[] = {"50%", "75%", "100%", "125%", "150%", "200%"};
+static const int WIN_H[] = {480, 600, 720, 840, 960, 1080, 1200, 1440};
+static const char *const WIN_NAMES[] = {"640 x 480", "800 x 600", "960 x 720", "1120 x 840", "1280 x 960",
+                                        "1440 x 1080", "1600 x 1200", "1920 x 1440"};
 static const int ANISO[] = {1, 2, 4, 8, 16};
 static const char *const ANISO_NAMES[] = {"Original", "2x", "4x", "8x", "16x"};
 static const char *const LANG_NAMES[] = {"Japanese", "English", "French", "German", "Spanish", "Italian"};
@@ -573,15 +778,16 @@ static const char *const REPORT_KINDS[] = {"Graphics", "Audio", "Controls", "Gam
                                            "Slow or stutter", "Other"};
 static const char *const ONOFF[] = {"Off", "On"};
 
-static int g_res_i, g_scale_i, g_aniso_i, g_kind_i;
+static int g_res_i, g_win_i, g_aniso_i, g_kind_i;
 static char g_note[160];
 
 static int index_of(const int *list, int n, int v)
 {
+    int best = 0;
     for (int i = 0; i < n; i++)
-        if (list[i] == v)
-            return i;
-    return 0;
+        if (list[i] <= v)
+            best = i;
+    return best;
 }
 
 static void sync_from_settings(void)
@@ -590,19 +796,30 @@ static void sync_from_settings(void)
     for (int i = 0; i < (int)(sizeof RES / sizeof RES[0]); i++)
         if (RES[i][0] == g_settings.width && RES[i][1] == g_settings.height)
             g_res_i = i;
-    g_scale_i = index_of(SCALES, 6, g_settings.window_scale);
-    g_aniso_i = index_of(ANISO, 5, g_settings.anisotropy);
+    g_win_i = index_of(WIN_H, (int)(sizeof WIN_H / sizeof WIN_H[0]), g_settings.window_height);
+    g_aniso_i = index_of(ANISO, (int)(sizeof ANISO / sizeof ANISO[0]), g_settings.anisotropy);
 }
 
-static void changed_res(void)
+/* Resolution or VSync: reset the device now. The menu's state block belongs to the old device
+ * state; the atlas is rebuilt for the new size on the next draw. */
+static void changed_display(void)
 {
     g_settings.width = RES[g_res_i][0];
     g_settings.height = RES[g_res_i][1];
     settings_save();
+    if (g_state) {
+        IDirect3DStateBlock9_Release(g_state);
+        g_state = NULL;
+    }
+    if (g_host.change_display)
+        g_host.change_display();
+    sync_from_settings(); /* a failed reset keeps the old resolution */
+    if (g_host.apply_window)
+        g_host.apply_window();
 }
 static void changed_window(void)
 {
-    g_settings.window_scale = SCALES[g_scale_i];
+    g_settings.window_height = WIN_H[g_win_i];
     settings_save();
     if (g_host.apply_window)
         g_host.apply_window();
@@ -636,12 +853,14 @@ static Item g_main[] = {
     ACTION("Quit ReJet", PAGE_QUIT, NULL, "Close the game. Save in the game first."),
 };
 static Item g_display[] = {
-    CHOICE("Resolution", g_res_i, RES_NAMES, 1, changed_res, "Render resolution (the Xbox drew 640 x 480)."),
-    CHOICE("Window size", g_scale_i, SCALE_NAMES, 0, changed_window, "Window size, relative to the resolution."),
+    CHOICE("Resolution", g_res_i, RES_NAMES, 0, changed_display,
+           "How sharp the game is drawn (the Xbox drew 640 x 480)."),
+    CHOICE("Window size", g_win_i, WIN_NAMES, 0, changed_window,
+           "How big the window is (fitted to the screen). Full screen ignores it."),
     TOGGLE("Full screen", g_settings.fullscreen, 0, NULL, "Borderless window over the whole monitor."),
     CHOICE("Texture filtering", g_aniso_i, ANISO_NAMES, 0, changed_aniso, "Sharper textures at an angle."),
     TOGGLE("Show FPS", g_settings.show_fps, 0, changed_save, "Frame-rate counter in the top left corner."),
-    TOGGLE("VSync", g_settings.vsync, 1, changed_save,
+    TOGGLE("VSync", g_settings.vsync, 0, changed_display,
            "Also wait for the monitor. Off is smoother: the game already runs at 60."),
 };
 static Item g_audio[] = {
@@ -689,14 +908,30 @@ static Item *page_items(int page, int *n)
     }
 }
 
+static void start_close(const char *why)
+{
+    if (g_closing)
+        return;
+    log_printf("menu: close (%s)\n", why);
+    g_closing = 1;
+    g_t_close = now_ms();
+    g_text_focus = 0;
+}
+
+static void open_page(int page, int dir)
+{
+    g_page = page;
+    g_page_dir = dir;
+    g_t_page = g_t_sel = now_ms();
+    g_sel_pos = (float)g_sel[page];
+}
+
 static void go_back(void)
 {
     if (g_depth)
-        g_page = g_stack[--g_depth];
-    else {
-        log_printf("menu: back from the main page\n");
-        InterlockedExchange(&g_open, 0);
-    }
+        open_page(g_stack[--g_depth], -1);
+    else
+        start_close("back from the main page");
 }
 
 static void report_save(void)
@@ -729,21 +964,26 @@ static void handle(int ev, char ch)
     int n;
     Item *items = page_items(g_page, &n), *it;
     int *sel = &g_sel[g_page];
+    if (g_closing)
+        return;
     if (*sel >= n)
         *sel = 0;
     it = &items[*sel];
     switch (ev) {
     case IN_UP:
     case IN_DOWN:
-        do /* skip nothing: every row is selectable, info rows included (they scroll the help) */
-            *sel = (*sel + (ev == IN_UP ? n - 1 : 1)) % n;
-        while (0);
+        *sel = (*sel + (ev == IN_UP ? n - 1 : 1)) % n;
+        if (abs(*sel - (int)(g_sel_pos + 0.5f)) > 1) /* wrapped round: jump, don't glide across */
+            g_sel_pos = (float)*sel;
+        g_t_sel = now_ms();
         break;
     case IN_LEFT:
     case IN_RIGHT: {
         int d = ev == IN_LEFT ? -1 : 1;
         if (it->type == IT_CHOICE || it->type == IT_TOGGLE) {
             *it->value = (*it->value + d + it->nchoices) % it->nchoices;
+            g_value_dir = d;
+            g_t_value = now_ms();
             if (it->value == &g_settings.fullscreen)
                 apply_full_screen();
             else if (it->changed)
@@ -752,6 +992,8 @@ static void handle(int ev, char ch)
         else if (it->type == IT_SLIDER) {
             int v = *it->value + d * 10;
             *it->value = v < 0 ? 0 : v > 100 ? 100 : v;
+            g_value_dir = d;
+            g_t_value = now_ms();
             if (it->changed)
                 it->changed();
         }
@@ -761,14 +1003,14 @@ static void handle(int ev, char ch)
         if (it->type == IT_ACTION) {
             if (it->changed)
                 it->changed();
-            if (it->target == -1) /* close the menu */
-                InterlockedExchange(&g_open, 0);
+            if (it->target == -1)
+                start_close(it->changed == report_save ? "bug report saved" : "resume");
             else if (it->target == -2)
                 go_back();
             else if (g_depth < 8) {
                 g_stack[g_depth++] = g_page;
-                g_page = it->target;
-                g_sel[g_page] = 0;
+                g_sel[it->target] = 0;
+                open_page(it->target, 1);
             }
         }
         else if (it->type == IT_TOGGLE || it->type == IT_CHOICE)
@@ -780,8 +1022,7 @@ static void handle(int ev, char ch)
         go_back();
         break;
     case IN_CLOSE:
-        log_printf("menu: close (Start / F1)\n");
-        InterlockedExchange(&g_open, 0);
+        start_close("Start / F1");
         break;
     case IN_CHAR:
         if (it->type == IT_TEXT && strlen(g_note) + 1 < sizeof g_note) {
@@ -796,45 +1037,65 @@ static void handle(int ev, char ch)
         break;
     }
     items = page_items(g_page, &n);
-    g_text_focus = g_open && items[g_sel[g_page] < n ? g_sel[g_page] : 0].type == IT_TEXT;
+    g_text_focus = !g_closing && items[g_sel[g_page] < n ? g_sel[g_page] : 0].type == IT_TEXT;
 }
 
 /* ------------------------------------------------------------------ menu drawing */
 
 static IDirect3DTexture9 *g_frozen; /* the last game frame, behind the menu */
 
-static void draw_frozen(void)
+/* How open the menu is, 0..1 (opening, then closing). */
+static float openness(void)
 {
+    float o = ease_out(progress(g_t_open, 280));
+    if (g_closing)
+        o *= 1 - ease_out(progress(g_t_close, 180));
+    return o;
+}
+
+static void draw_frozen(float o)
+{
+    BYTE k = (BYTE)(255 - (255 - 0x5A) * o); /* darkens as the menu opens */
+    DWORD c = 0xFF000000u | (DWORD)k << 16 | (DWORD)k << 8 | k;
+    Vertex v[6];
+    float w = (float)g_bw - 0.5f, h = (float)g_bh - 0.5f;
     if (!g_frozen)
         return;
-    {
-        DWORD c = 0xFF5A6464u; /* darkened */
-        Vertex *v = g_v + g_nv;
-        float w = (float)g_bw - 0.5f, h = (float)g_bh - 0.5f;
-        /* drawn with its own texture before the menu's batch */
-        v[0] = (Vertex){-0.5f, -0.5f, 0, 1, c, 0, 0};
-        v[1] = (Vertex){w, -0.5f, 0, 1, c, 1, 0};
-        v[2] = (Vertex){-0.5f, h, 0, 1, c, 0, 1};
-        v[3] = v[1];
-        v[4] = (Vertex){w, h, 0, 1, c, 1, 1};
-        v[5] = v[2];
-        IDirect3DDevice9Ex_SetTexture(DEV, 0, (IDirect3DBaseTexture9 *)g_frozen);
-        IDirect3DDevice9Ex_SetFVF(DEV, FVF);
-        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_ALPHABLENDENABLE, FALSE);
-        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_ZENABLE, D3DZB_FALSE);
-        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_STENCILENABLE, FALSE);
-        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_SCISSORTESTENABLE, FALSE);
-        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_CULLMODE, D3DCULL_NONE);
-        IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_LIGHTING, FALSE);
-        IDirect3DDevice9Ex_SetVertexShader(DEV, NULL);
-        IDirect3DDevice9Ex_SetPixelShader(DEV, NULL);
-        IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLOROP, D3DTOP_MODULATE);
-        IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-        IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-        IDirect3DDevice9Ex_SetTextureStageState(DEV, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
-        IDirect3DDevice9Ex_BeginScene(DEV);
-        IDirect3DDevice9Ex_DrawPrimitiveUP(DEV, D3DPT_TRIANGLELIST, 2, v, sizeof(Vertex));
-        IDirect3DDevice9Ex_EndScene(DEV);
+    v[0] = (Vertex){-0.5f, -0.5f, 0, 1, c, 0, 0};
+    v[1] = (Vertex){w, -0.5f, 0, 1, c, 1, 0};
+    v[2] = (Vertex){-0.5f, h, 0, 1, c, 0, 1};
+    v[3] = v[1];
+    v[4] = (Vertex){w, h, 0, 1, c, 1, 1};
+    v[5] = v[2];
+    IDirect3DDevice9Ex_SetTexture(DEV, 0, (IDirect3DBaseTexture9 *)g_frozen);
+    IDirect3DDevice9Ex_SetFVF(DEV, FVF);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_ALPHABLENDENABLE, FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_ZENABLE, D3DZB_FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_STENCILENABLE, FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_SCISSORTESTENABLE, FALSE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_CULLMODE, D3DCULL_NONE);
+    IDirect3DDevice9Ex_SetRenderState(DEV, D3DRS_LIGHTING, FALSE);
+    IDirect3DDevice9Ex_SetVertexShader(DEV, NULL);
+    IDirect3DDevice9Ex_SetPixelShader(DEV, NULL);
+    IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+    IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+    IDirect3DDevice9Ex_SetTextureStageState(DEV, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+    IDirect3DDevice9Ex_BeginScene(DEV);
+    IDirect3DDevice9Ex_DrawPrimitiveUP(DEV, D3DPT_TRIANGLELIST, 2, v, sizeof(Vertex));
+    IDirect3DDevice9Ex_EndScene(DEV);
+}
+
+/* Slow diagonal stripes drifting across the background, JSRF poster style. */
+static void draw_stripes(double t)
+{
+    static const DWORD col[] = {0x14C8F01Eu, 0x10FF2D8Au, 0x0E19C8C8u, 0x12C8F01Eu, 0x0CFF2D8Au};
+    for (int i = 0; i < 5; i++) {
+        float w = 90.0f + 50.0f * (float)(i % 3);
+        float x = (float)fmod(t * (0.025 + 0.008 * i) + i * 410.0, 2200.0) - 600.0f;
+        box(x, -10, x + w, 970, 380, col[i]);
     }
 }
 
@@ -844,76 +1105,119 @@ static void draw_menu(void)
     Item *items = page_items(g_page, &n);
     int sel = g_sel[g_page] < n ? g_sel[g_page] : 0;
     float y0 = 250, row = 62;
-    ULONGLONG t = GetTickCount64();
+    double t = now_ms();
+    float o = openness(), slide = 1 - o;
+    float pg = progress(g_t_page, 160), saved_fade = g_fade;
     int restart_note = 0;
 
-    /* title strip */
-    box(-40, 70, 700, 190, 40, C_LIME);
-    box(-40, 182, 640, 196, 40, C_PINK);
-    text(FONT_TITLE, 70, 82, 0, C_BLACK, "ReJet");
-    text(FONT_ITEM, 360, 116, 0, C_BLACK, PAGE_TITLE[g_page]);
+    g_fade = o;
+    draw_stripes(t);
 
-    /* the list panel */
-    box(90, y0 - 26, 1210, y0 + row * n + 14, 24, C_PANEL);
-    for (int i = 0; i < n; i++) {
-        const Item *it = &items[i];
-        float y = y0 + row * i;
-        int on = i == sel;
-        DWORD fg = on ? C_BLACK : (it->type == IT_INFO ? C_GREY : C_WHITE);
-        char val[200] = "";
-        if (on) {
-            float pulse = 0.85f + 0.15f * (float)((t / 8) % 100) / 100.0f;
-            box(110, y - 6, 1190, y + row - 14, 14, with_alpha(C_LIME, pulse));
-            box(110, y - 6, 122, y + row - 14, 14, C_PINK);
+    /* title strip: slides in from the left; the pink underline grows */
+    {
+        float dx = -1000 * slide, tx, right;
+        /* the strip fits the logo (or "ReJet") and the longest page name */
+        tx = g_logo_px ? 64 + 76 * g_logo_aspect + 30 : 360;
+        right = tx + text_width(FONT_ITEM, "REPORT A BUG") + 60;
+        if (right < 700)
+            right = 700;
+        box(-40 + dx, 70, right + dx, 190, 40, C_LIME);
+        for (int i = 0; i < 4; i++) { /* moving speed lines inside the strip */
+            float sx = 120 + (float)fmod(t * 0.12 + i * 150.0, (double)right - 140.0);
+            box(sx + dx, 78, sx + 26 + dx, 182, 40, 0x22000000u);
         }
-        text(FONT_ITEM, 140, y, 0, fg, it->label);
-        switch (it->type) {
-        case IT_CHOICE:
-        case IT_TOGGLE:
-            snprintf(val, sizeof val, on ? "<  %s%s  >" : "%s%s", it->choices[*it->value], it->restart ? " *" : "");
-            break;
-        case IT_SLIDER: {
-            float x0 = 820, x1 = 1110, f = (float)*it->value / 100.0f;
-            box(x0, y + 14, x1, y + 30, 6, on ? 0x66000000u : 0x55FFFFFFu);
-            box(x0, y + 14, x0 + (x1 - x0) * f, y + 30, 6, on ? C_BLACK : C_TEAL);
-            snprintf(val, sizeof val, "%d", *it->value);
-            text(FONT_SMALL, 1170, y + 6, 2, fg, val);
-            val[0] = 0;
-            break;
-        }
-        case IT_TEXT:
-            snprintf(val, sizeof val, "%s%s", g_note[0] ? g_note : (on ? "" : "(optional)"),
-                     on && (t / 500) % 2 ? "_" : "");
-            break;
-        case IT_INFO:
-            snprintf(val, sizeof val, "%s", it->help);
-            break;
-        }
-        if (it->restart)
-            restart_note = 1;
-        if (val[0]) {
-            int font = it->type == IT_TEXT || it->type == IT_INFO ? FONT_SMALL : FONT_ITEM;
-            float maxw = it->type == IT_TEXT ? 760.0f : 600.0f, w = text_width(font, val);
-            const char *v = val;
-            while (w > maxw && *v) /* long notes: show the end */
-                w -= text_width(font, (char[]){*v++, 0});
-            text(font, 1170, y + (font == FONT_SMALL ? 6 : 0), 2, fg, v);
-        }
+        box(-40 + dx, 182, -40 + dx + (right - 20) * ease_out(progress(g_t_open + 120, 300)), 196, 40, C_PINK);
+        if (g_logo_px)
+            logo(64 + dx, 92, 76, C_WHITE); /* centred in the strip */
+        else
+            text(FONT_TITLE, 70 + dx, 82, 0, C_BLACK, "ReJet");
+        /* page name drops in on every page change */
+        g_fade = o * ease_out(pg);
+        text(FONT_ITEM, tx + dx, 116 - 18 * (1 - ease_out(pg)), 0, C_BLACK, PAGE_TITLE[g_page]);
+        g_fade = o;
     }
 
-    /* help line for the selected row, and the footer */
+    /* the list panel slides in from the right */
+    {
+        float dx = 900 * slide * slide;
+        float target = (float)sel, k = 1 - (float)exp(-(1000.0 / 60.0) / 55.0);
+        box(90 + dx, y0 - 26, 1210 + dx, y0 + row * n + 14, 24, C_PANEL);
+        g_sel_pos += (target - g_sel_pos) * k; /* the selection bar glides */
+        if (fabsf(target - g_sel_pos) < 0.002f)
+            g_sel_pos = target;
+        {
+            float y = y0 + row * g_sel_pos, pulse = 0.88f + 0.12f * (float)sin(t * 0.006);
+            float grow = ease_back(progress(g_t_sel, 220));
+            box(110 + dx, y - 6, 110 + dx + 1080 * (0.9f + 0.1f * grow), y + row - 14, 14, with_alpha(C_LIME, pulse));
+            box(110 + dx, y - 6, 122 + dx, y + row - 14, 14, C_PINK);
+        }
+        for (int i = 0; i < n; i++) {
+            const Item *it = &items[i];
+            /* rows arrive one after another, from the side the page came from */
+            float rp = progress(g_t_page + 24.0 * i, 240);
+            float rx = dx + 70 * (float)g_page_dir * (1 - ease_back(rp)), y = y0 + row * i;
+            int on = i == sel;
+            DWORD fg = on ? C_BLACK : (it->type == IT_INFO ? C_GREY : C_WHITE);
+            char val[200] = "";
+            g_fade = o * ease_out(rp);
+            text(FONT_ITEM, 140 + rx, y, 0, fg, it->label);
+            switch (it->type) {
+            case IT_CHOICE:
+            case IT_TOGGLE:
+                snprintf(val, sizeof val, on ? "<  %s%s  >" : "%s%s", it->choices[*it->value],
+                         it->restart ? " *" : "");
+                break;
+            case IT_SLIDER: {
+                float x0 = 820 + rx, x1 = 1110 + rx, f = (float)*it->value / 100.0f;
+                box(x0, y + 14, x1, y + 30, 6, on ? 0x66000000u : 0x55FFFFFFu);
+                box(x0, y + 14, x0 + (x1 - x0) * f, y + 30, 6, on ? C_BLACK : C_TEAL);
+                snprintf(val, sizeof val, "%d", *it->value);
+                text(FONT_SMALL, 1170 + rx, y + 6, 2, fg, val);
+                val[0] = 0;
+                break;
+            }
+            case IT_TEXT:
+                snprintf(val, sizeof val, "%s%s", g_note[0] ? g_note : (on ? "" : "(optional)"),
+                         on && fmod(t, 1000.0) < 500.0 ? "_" : "");
+                break;
+            case IT_INFO:
+                snprintf(val, sizeof val, "%s", it->help);
+                break;
+            }
+            if (it->restart)
+                restart_note = 1;
+            if (val[0]) {
+                int font = it->type == IT_TEXT || it->type == IT_INFO ? FONT_SMALL : FONT_ITEM;
+                float maxw = it->type == IT_TEXT ? 760.0f : 600.0f, w = text_width(font, val);
+                float nudge = on ? 16.0f * (float)g_value_dir * (1 - ease_out(progress(g_t_value, 200))) : 0;
+                const char *v = val;
+                while (w > maxw && *v) /* long notes: show the end */
+                    w -= text_width(font, (char[]){*v++, 0});
+                text(font, 1170 + rx + nudge, y + (font == FONT_SMALL ? 6 : 0), 2, fg, v);
+            }
+        }
+        g_fade = o;
+    }
+
+    /* help line for the selected row (fades in), and the footer (rises in) */
     {
         const Item *it = &items[sel];
         float y = y0 + row * n + 34;
+        g_fade = o * ease_out(progress(g_t_sel, 200));
         if (it->help && it->type != IT_INFO)
             text(FONT_SMALL, 110, y, 0, C_WHITE, it->help);
+        g_fade = o;
         if (restart_note)
             text(FONT_SMALL, 110, y + 34, 0, C_GREY, "* applies the next time ReJet starts");
     }
-    box(-40, 880, 1320, 930, 0, C_SHADE);
-    text(FONT_SMALL, 640, 891, 1, C_WHITE,
-         g_text_focus ? "Type your note   Enter / Down  next   Esc  back"
-                      : "A / Enter  select     B / Esc  back     Left / Right  change     Start / F1  resume");
+    {
+        float dy = 80 * slide;
+        box(-40, 880 + dy, 1320, 930 + dy, 0, C_SHADE);
+        text(FONT_SMALL, 640, 891 + dy, 1, C_WHITE,
+             g_text_focus ? "Type your note   Enter / Down  next   Esc  back"
+                          : "A / Enter  select     B / Esc  back     Left / Right  change     Start / F1  resume");
+    }
+    g_fade = saved_fade;
 }
 
 /* ------------------------------------------------------------------ the loop */
@@ -940,13 +1244,14 @@ static void freeze_frame(void)
 
 static void run_menu(void)
 {
-    ULONGLONG opened = GetTickCount64();
     log_printf("menu: opened\n");
     sync_from_settings();
     freeze_frame();
-    g_page = PAGE_MAIN;
     g_depth = 0;
+    g_closing = 0;
     g_sel[PAGE_MAIN] = 0;
+    g_t_open = now_ms();
+    open_page(PAGE_MAIN, 1);
     EnterCriticalSection(&g_event_lock);
     g_nevents = 0;
     LeaveCriticalSection(&g_event_lock);
@@ -957,7 +1262,7 @@ static void run_menu(void)
         g_repeat_at[p] = GetTickCount64() + 400;
     }
     InterlockedExchange(&g_open, 1);
-    while (g_open) {
+    for (;;) {
         IDirect3DStateBlock9 *saved = NULL;
         poll_pads();
         for (;;) {
@@ -973,17 +1278,12 @@ static void run_menu(void)
             memmove(g_events, g_events + 1, sizeof g_events[0] * (size_t)--g_nevents);
             LeaveCriticalSection(&g_event_lock);
             handle(ev, ch);
-            if (!g_open)
-                break;
         }
-        if (!g_open)
+        if (g_closing && progress(g_t_close, 180) >= 1)
             break;
         ready();
-        g_fade = (float)(GetTickCount64() - opened) / 120.0f;
-        if (g_fade > 1)
-            g_fade = 1;
         if (SUCCEEDED(IDirect3DDevice9Ex_CreateStateBlock(DEV, D3DSBT_ALL, &saved))) {
-            draw_frozen();
+            draw_frozen(openness());
             IDirect3DStateBlock9_Apply(saved);
             IDirect3DStateBlock9_Release(saved);
         }
@@ -991,13 +1291,14 @@ static void run_menu(void)
         draw_toasts();
         flush();
         g_host.present();
-        Sleep(16);
+        Sleep(15);
     }
     g_text_focus = 0;
     if (g_frozen) {
         IDirect3DTexture9_Release(g_frozen);
         g_frozen = NULL;
     }
+    InterlockedExchange(&g_open, 0);
     InterlockedExchange(&g_swallow, 1);
     log_printf("menu: closed\n");
 }
@@ -1026,6 +1327,7 @@ void menu_init(const MenuHost *host)
     if (!once) {
         InitializeCriticalSection(&g_toast_lock);
         InitializeCriticalSection(&g_event_lock);
+        load_logo();
         once = 1;
     }
     g_host = *host;

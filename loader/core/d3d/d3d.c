@@ -77,6 +77,8 @@ static char g_capture_note[256];             /* bug report from the ReJet menu, 
 static CRITICAL_SECTION g_capture_note_lock;
 
 static void present(void);
+static void change_display(void);
+static D3DPRESENT_PARAMETERS g_hp; /* the device's present parameters (for ResetEx) */
 static void request_capture(const char *note);
 
 /* Log the first call of each not-yet-implemented entry point. */
@@ -173,10 +175,19 @@ static void apply_window(void)
                      mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
     }
     else {
-        /* the window scale is in Windows' scaled pixels (100% = the render size at 100% display scaling) */
-        RECT r = {0, 0, (LONG)((LONGLONG)g_hw * g_settings.window_scale * dpi / 9600),
-                  (LONG)((LONGLONG)g_hh * g_settings.window_scale * dpi / 9600)};
+        /* the window height is in Windows' scaled pixels, independent of the render resolution; 4:3,
+         * shrunk to fit the screen */
+        LONG ch = (LONG)((LONGLONG)g_settings.window_height * dpi / 96), cw = ch * 4 / 3;
+        RECT r, frame = {0, 0, 0, 0};
         LONG ww, wh;
+        AdjustWindowRect(&frame, WS_OVERLAPPEDWINDOW, FALSE);
+        if (ch + (frame.bottom - frame.top) > mi.rcWork.bottom - mi.rcWork.top) {
+            ch = mi.rcWork.bottom - mi.rcWork.top - (frame.bottom - frame.top);
+            cw = ch * 4 / 3;
+        }
+        r.left = r.top = 0;
+        r.right = cw;
+        r.bottom = ch;
         AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
         ww = r.right - r.left;
         wh = r.bottom - r.top;
@@ -266,7 +277,7 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
     g_sx = (float)g_hw / (float)g_xw;
     g_sy = (float)g_hh / (float)g_xh;
     become_dpi_aware();
-    create_window((int)g_hw * g_settings.window_scale / 100, (int)g_hh * g_settings.window_scale / 100);
+    create_window(g_settings.window_height * 4 / 3, g_settings.window_height); /* apply_window sizes it properly */
 
     if (FAILED(Direct3DCreate9Ex(D3D_SDK_VERSION, &g_d3d))) {
         log_printf("error: Direct3DCreate9Ex failed\n");
@@ -297,6 +308,7 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
         log_printf("error: CreateDeviceEx failed (%08lX)\n", hr);
         return hr;
     }
+    g_hp = hp;
 
     /* Stand-in Xbox device object: original helpers that still run read fields through it. */
     g_xdevice = (unsigned char *)calloc(1, XDEVICE_SIZE);
@@ -334,7 +346,7 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
     g_vconst[VSH_C_2D][0] = g_vconst[VSH_C_2D][1] = g_vconst[VSH_C_2D][2] = g_vconst[VSH_C_2D][3] = 1.0f;
     log_printf("d3d: Direct3D 9Ex device ready, window %p\n", (void *)g_wnd);
     {
-        MenuHost host = {(struct IDirect3DDevice9Ex *)g_dev, g_wnd, present, request_capture, apply_window};
+        MenuHost host = {(struct IDirect3DDevice9Ex *)g_dev, g_wnd, present, request_capture, apply_window, change_display};
         menu_init(&host);
     }
     apply_window(); /* full screen, or the window sized for the display scaling */
@@ -1263,10 +1275,14 @@ static DWORD gl_stencilop(DWORD v)
 
 static DWORD g_rs[256]; /* what rs() last set, for the draw log */
 
+static BYTE g_rs_set[256]; /* states rs() has set: put back after a device reset */
+
 static void rs(D3DRENDERSTATETYPE s, DWORD v)
 {
-    if ((unsigned)s < 256)
+    if ((unsigned)s < 256) {
         g_rs[s] = v;
+        g_rs_set[s] = 1;
+    }
     if (g_dev)
         IDirect3DDevice9Ex_SetRenderState(g_dev, s, v);
 }
@@ -1473,6 +1489,7 @@ static void apply_texture_stages(void)
  * Kept for GetTransform (the engine reads non-projection states back, 0x154D00) and passed to
  * the host for fixed-function draws. */
 static D3DMATRIX g_xform[10];
+static WORD g_xform_set; /* bit per state: put back after a device reset */
 
 static D3DTRANSFORMSTATETYPE host_transform(DWORD s)
 {
@@ -1496,6 +1513,7 @@ static HRESULT XBAPI hle_D3DDevice_SetTransform(DWORD State, const D3DMATRIX *pM
                        pMatrix->_21, pMatrix->_22, pMatrix->_23, pMatrix->_24, pMatrix->_31, pMatrix->_32,
                        pMatrix->_33, pMatrix->_34, pMatrix->_41, pMatrix->_42, pMatrix->_43, pMatrix->_44);
         g_xform[State] = *pMatrix;
+        g_xform_set |= (WORD)(1u << State);
         if (g_dev)
             IDirect3DDevice9Ex_SetTransform(g_dev, host_transform(State), pMatrix);
     }
@@ -1590,11 +1608,36 @@ typedef struct RenderTarget {
     UINT w, h;           /* game size */
     UINT hw, hh;         /* host size */
     int linear;          /* texel-addressed format */
+    D3DFORMAT format;    /* host format */
     IDirect3DTexture9 *tex;
     IDirect3DSurface9 *surf, *depth;
 } RenderTarget;
 static RenderTarget g_rt[MAX_RT];
 static unsigned g_rt_count;
+
+/* (Re)create a render target's host texture and depth at the current render scale. */
+static int rt_create_host(RenderTarget *r)
+{
+    if (r->depth)
+        IDirect3DSurface9_Release(r->depth);
+    if (r->surf)
+        IDirect3DSurface9_Release(r->surf);
+    if (r->tex)
+        IDirect3DTexture9_Release(r->tex);
+    r->tex = NULL;
+    r->surf = r->depth = NULL;
+    r->hw = (UINT)(r->w * g_sx + 0.5f);
+    r->hh = (UINT)(r->h * g_sy + 0.5f);
+    if (r->hw > 4096)
+        r->hw = 4096;
+    if (r->hh > 4096)
+        r->hh = 4096;
+    return SUCCEEDED(IDirect3DDevice9Ex_CreateTexture(g_dev, r->hw, r->hh, 1, D3DUSAGE_RENDERTARGET, r->format,
+                                                      D3DPOOL_DEFAULT, &r->tex, NULL)) &&
+           SUCCEEDED(IDirect3DTexture9_GetSurfaceLevel(r->tex, 0, &r->surf)) &&
+           SUCCEEDED(IDirect3DDevice9Ex_CreateDepthStencilSurface(g_dev, r->hw, r->hh, D3DFMT_D24S8,
+                                                                 D3DMULTISAMPLE_NONE, 0, TRUE, &r->depth, NULL));
+}
 
 static const RenderTarget *rt_find(DWORD data)
 {
@@ -1623,17 +1666,8 @@ static const RenderTarget *rt_get(const XD3DSurface *s)
     r->w = c->Size ? XSIZE_WIDTH(c->Size) : 1u << XFMT_USIZE(c->Format);
     r->h = c->Size ? XSIZE_HEIGHT(c->Size) : 1u << XFMT_VSIZE(c->Format);
     r->linear = c->Size != 0;
-    r->hw = (UINT)(r->w * g_sx + 0.5f);
-    r->hh = (UINT)(r->h * g_sy + 0.5f);
-    if (r->hw > 4096)
-        r->hw = 4096;
-    if (r->hh > 4096)
-        r->hh = 4096;
-    if (FAILED(IDirect3DDevice9Ex_CreateTexture(g_dev, r->hw, r->hh, 1, D3DUSAGE_RENDERTARGET, hf, D3DPOOL_DEFAULT,
-                                                &r->tex, NULL)) ||
-        FAILED(IDirect3DTexture9_GetSurfaceLevel(r->tex, 0, &r->surf)) ||
-        FAILED(IDirect3DDevice9Ex_CreateDepthStencilSurface(g_dev, r->hw, r->hh, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0,
-                                                            TRUE, &r->depth, NULL))) {
+    r->format = hf;
+    if (!rt_create_host(r)) {
         log_printf("d3d: render target %ux%u (format %02X) could not be created\n", r->w, r->h, f);
         return NULL;
     }
@@ -1694,6 +1728,73 @@ static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, X
     g_cur_rt = r;
     set_target_metrics(r->w, r->h, (float)r->hw / (float)r->w, (float)r->hh / (float)r->h);
     return S_OK;
+}
+
+/* ReJet menu: resolution or VSync changed. Called on the game thread inside Swap (between
+ * frames). ResetEx gives the back buffer and depth their new size; D3D9Ex keeps textures,
+ * shaders and buffers, but resets device state, so what ReJet has set is put back, and the
+ * render-target textures are recreated at the new scale (the game redraws them every frame). */
+static void change_display(void)
+{
+    D3DPRESENT_PARAMETERS hp = g_hp;
+    UINT w = (UINT)g_settings.width, h = (UINT)g_settings.height;
+    HRESULT hr;
+    if (!g_dev)
+        return;
+    hp.BackBufferWidth = w;
+    hp.BackBufferHeight = h;
+    hp.PresentationInterval = g_settings.vsync ? D3DPRESENT_INTERVAL_ONE : D3DPRESENT_INTERVAL_IMMEDIATE;
+    if (hp.BackBufferWidth == g_hp.BackBufferWidth && hp.BackBufferHeight == g_hp.BackBufferHeight &&
+        hp.PresentationInterval == g_hp.PresentationInterval)
+        return;
+    if (g_host_bb)
+        IDirect3DSurface9_Release(g_host_bb);
+    if (g_host_depth)
+        IDirect3DSurface9_Release(g_host_depth);
+    g_host_bb = g_host_depth = NULL;
+    hr = IDirect3DDevice9Ex_ResetEx(g_dev, &hp, NULL);
+    if (FAILED(hr)) {
+        log_printf("d3d: ResetEx to %ux%u failed (%08lX); keeping %ux%u\n", w, h, hr, g_hw, g_hh);
+        hp = g_hp;
+        if (FAILED(IDirect3DDevice9Ex_ResetEx(g_dev, &hp, NULL)))
+            log_printf("d3d: ResetEx back to %ux%u failed too\n", g_hw, g_hh);
+        g_settings.width = (int)g_hw;
+        g_settings.height = (int)g_hh;
+    }
+    else {
+        g_hp = hp;
+        g_hw = w;
+        g_hh = h;
+        g_sx = (float)g_hw / (float)g_xw;
+        g_sy = (float)g_hh / (float)g_xh;
+    }
+    IDirect3DDevice9Ex_GetRenderTarget(g_dev, 0, &g_host_bb);
+    IDirect3DDevice9Ex_GetDepthStencilSurface(g_dev, &g_host_depth);
+    for (unsigned i = 0; i < g_rt_count; i++)
+        if (!rt_create_host(&g_rt[i]))
+            log_printf("d3d: render target #%u could not be recreated\n", i);
+    /* state D3D9 forgot */
+    for (unsigned i = 0; i < 256; i++)
+        if (g_rs_set[i])
+            IDirect3DDevice9Ex_SetRenderState(g_dev, (D3DRENDERSTATETYPE)i, g_rs[i]);
+    for (DWORD i = 0; i < 10; i++)
+        if (g_xform_set & (1u << i))
+            IDirect3DDevice9Ex_SetTransform(g_dev, host_transform(i), &g_xform[i]);
+    IDirect3DDevice9Ex_SetMaterial(g_dev, &g_material);
+    for (DWORD i = 0; i < MAX_LIGHTS; i++) {
+        if (g_light[i].Type)
+            IDirect3DDevice9Ex_SetLight(g_dev, i, &g_light[i]);
+        IDirect3DDevice9Ex_LightEnable(g_dev, i, g_light_on[i]);
+    }
+    if (g_cur_rt) {
+        IDirect3DDevice9Ex_SetRenderTarget(g_dev, 0, g_cur_rt->surf);
+        IDirect3DDevice9Ex_SetDepthStencilSurface(g_dev, g_cur_rt->depth);
+        set_target_metrics(g_cur_rt->w, g_cur_rt->h, (float)g_cur_rt->hw / (float)g_cur_rt->w,
+                           (float)g_cur_rt->hh / (float)g_cur_rt->h);
+    }
+    else
+        set_target_metrics(g_xw, g_xh, g_sx, g_sy);
+    log_printf("d3d: display changed: rendering at %ux%u, vsync %s\n", g_hw, g_hh, g_settings.vsync ? "on" : "off");
 }
 
 /* End of a captured frame: the screenshot, each render-target texture as the game left it, and

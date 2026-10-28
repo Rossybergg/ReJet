@@ -6,10 +6,10 @@ What ReJet adds to the original game, done and planned. Every enhancement is a s
 
 | Enhancement | Notes |
 |---|---|
-| ReJet menu | In-game pause menu in the JSRF style; controller and keyboard; settings saved at once. |
+| ReJet menu | In-game pause menu in the JSRF style with the ReJet logo and animations (slide in/out, staggered rows, gliding selection); controller and keyboard; settings saved at once. |
 | Bug reports | Menu → Report a bug: a capture of the moment plus a category and typed note (`note.txt`). F10/F11/F12 for markers, captures, screenshots, with on-screen confirmations. |
-| Any resolution | 640x480 up to 2880x2160 (4:3 until widescreen). Applies on the next start for now. |
-| Full screen, window size | Borderless full screen and window scale, live. DPI aware (sharp on scaled displays). |
+| Any resolution | 640x480 up to 2880x2160 (4:3 until widescreen), live (device reset). VSync live too. |
+| Full screen, window size | Borderless full screen, and a window size independent of the resolution, live. DPI aware (sharp on scaled displays). |
 | Texture filtering | Anisotropic 2x-16x, live. |
 | FPS counter | Live. |
 | Volume, mute in background | Live; music is lowered while the menu is open. |
@@ -19,7 +19,7 @@ What ReJet adds to the original game, done and planned. Every enhancement is a s
 
 | Idea | Why | What it needs |
 |---|---|---|
-| Live resolution and MSAA | Change them without restarting. | D3D9Ex `ResetEx`, recreate ReJet's render targets and depth; MSAA through a multisampled scene buffer (and back to the DISCARD swap effect). |
+| MSAA | Smoother edges. | A multisampled scene buffer resolved into the back buffer (and back to the DISCARD swap effect); the device reset path exists now. |
 | Widescreen (Hor+) | JSRF is 4:3; most screens are 16:9 or wider. | Patch the projection (renderer slot 31 / camera +0x74, docs/SUBSYSTEMS.md); check the HUD, map and cutscene bars. |
 | Right-stick camera | The original camera only recentres (L trigger); a right-stick orbit is standard now. | Hook the camera update (docs/SUBSYSTEMS.md); ReWhacked's orbit camera is the model. |
 | Button remapping | Players expect it on PC; keyboard layout is fixed now. | A Controls page that edits bindings, saved to `rejet.ini`. |

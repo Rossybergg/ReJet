@@ -10,7 +10,7 @@ How to play-test and report problems so they can be found and fixed quickly. Eve
 
 ## The ReJet menu
 
-Press **F1**, or **Back + Start** on any controller, to pause the game and open the ReJet menu. Move with the d-pad, left stick or arrow keys; A / Enter selects, B / Esc goes back, Start / F1 resumes. Settings (display, audio, language) are saved at once and kept for the next session; those marked * apply the next time ReJet starts.
+Press **F1**, or **Back + Start** on any controller, to pause the game and open the ReJet menu. Move with the d-pad, left stick or arrow keys; A / Enter selects, B / Esc goes back, Start / F1 resumes. Settings are saved at once and kept for the next session. Resolution sets how sharp the game is drawn and window size how big the window is; both change live. Only the language (marked *) waits for the next start.
 
 **Report a bug** in the menu is the easiest way to report a problem: pick what went wrong, optionally type a note, and save. It makes a bug capture (below) of the game screen with your note in `note.txt`.
 

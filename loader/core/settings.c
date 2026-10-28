@@ -8,7 +8,7 @@
 #include "settings.h"
 
 Settings g_settings = {
-    1280, 960, 100, 0, 0, 1, 0, /* display (host vsync off: the emulated vblank paces the game) */
+    1280, 960, 960, 0, 0, 1, 0, /* display (host vsync off: the emulated vblank paces the game) */
     100, 0,                     /* audio */
     GAME_LANG_ENGLISH,          /* console */
 };
@@ -42,7 +42,7 @@ void settings_load(void)
     s->field = clampi((int)GetPrivateProfileIntW(L##section, L##key, s->field, g_path), lo, hi)
     GET("Display", "Width", width, 320, 7680);
     GET("Display", "Height", height, 240, 4320);
-    GET("Display", "WindowScale", window_scale, 25, 400);
+    GET("Display", "WindowHeight", window_height, 240, 4320);
     GET("Display", "VSync", vsync, 0, 1);
     GET("Display", "Fullscreen", fullscreen, 0, 1);
     GET("Display", "Anisotropy", anisotropy, 1, 16);
@@ -51,8 +51,8 @@ void settings_load(void)
     GET("Audio", "MuteInBackground", mute_in_background, 0, 1);
     GET("Console", "Language", language, GAME_LANG_JAPANESE, GAME_LANG_ITALIAN);
 #undef GET
-    log_printf("settings: %dx%d (window %d%%%s), vsync %d, anisotropy %d, language %d\n", s->width, s->height,
-               s->window_scale, s->fullscreen ? ", full screen" : "", s->vsync, s->anisotropy, s->language);
+    log_printf("settings: %dx%d (window height %d%s), vsync %d, anisotropy %d, language %d\n", s->width, s->height,
+               s->window_height, s->fullscreen ? ", full screen" : "", s->vsync, s->anisotropy, s->language);
 }
 
 void settings_save(void)
@@ -68,7 +68,7 @@ void settings_save(void)
     } while (0)
     PUT("Display", "Width", width);
     PUT("Display", "Height", height);
-    PUT("Display", "WindowScale", window_scale);
+    PUT("Display", "WindowHeight", window_height);
     PUT("Display", "VSync", vsync);
     PUT("Display", "Fullscreen", fullscreen);
     PUT("Display", "Anisotropy", anisotropy);
