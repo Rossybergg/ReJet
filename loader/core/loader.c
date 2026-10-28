@@ -412,8 +412,28 @@ static int run(void *image_base, unsigned image_size)
     GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
     *strrchr(exe_dir, '\\') = 0;
     snprintf(log_path, sizeof log_path, "%s\\loader.log", exe_dir);
+    { /* keep the previous session's log: logs\loader_<its date and time>.log */
+        WIN32_FILE_ATTRIBUTE_DATA a;
+        if (GetFileAttributesExA(log_path, GetFileExInfoStandard, &a)) {
+            char old[MAX_PATH], dir[MAX_PATH];
+            FILETIME local;
+            SYSTEMTIME t;
+            FileTimeToLocalFileTime(&a.ftLastWriteTime, &local);
+            FileTimeToSystemTime(&local, &t);
+            snprintf(dir, sizeof dir, "%s\\logs", exe_dir);
+            CreateDirectoryA(dir, NULL);
+            snprintf(old, sizeof old, "%s\\loader_%04u%02u%02u_%02u%02u%02u.log", dir, t.wYear, t.wMonth, t.wDay, t.wHour,
+                     t.wMinute, t.wSecond);
+            MoveFileExA(log_path, old, MOVEFILE_REPLACE_EXISTING);
+        }
+    }
     g_log = fopen(log_path, "w");
-    log_printf("rejet loader (Phase 2), image %08X size %08X\n", (unsigned)(UINT_PTR)image_base, image_size);
+    {
+        SYSTEMTIME t;
+        GetLocalTime(&t);
+        log_printf("rejet loader, session %04u-%02u-%02u %02u:%02u:%02u, image %08X size %08X\n", t.wYear, t.wMonth, t.wDay,
+                   t.wHour, t.wMinute, t.wSecond, (unsigned)(UINT_PTR)image_base, image_size);
+    }
 
     argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argc < 2) {

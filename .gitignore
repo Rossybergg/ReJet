@@ -24,5 +24,14 @@ __pycache__/
 # Local machine overrides
 .claude/settings.local.json
 
+# Play-test output (normally under build\loader): screenshots, captures and logs show the game
+# and the tester's machine
+captures/
+Screenshots/
+logs/
+*.log
+*.bmp
+rejet.ini
+
 # Alpha builds (binaries, shared privately)
 /alpha/

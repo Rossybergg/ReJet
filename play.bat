@@ -5,4 +5,6 @@ rem The log goes to build\loader\loader.log; set REJET_TRACE=1 to log every kern
 setlocal
 set "SECS=%~1"
 if "%SECS%"=="" set SECS=30
-"%~dp0build\loader\ReJetLoader.exe" "%USERPROFILE%\GameData\JSRF\default.xbe" %SECS%
+rem Run from build\loader so screenshots, captures and logs all land there (docs\TESTING.md).
+cd /d "%~dp0build\loader"
+.\ReJetLoader.exe "%USERPROFILE%\GameData\JSRF\default.xbe" %SECS%

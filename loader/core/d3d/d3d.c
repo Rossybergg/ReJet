@@ -64,6 +64,14 @@ static UINT g_base_vertex;
 static int g_in_scene;
 static ULONG g_draws, g_skipped, g_untextured; /* per-600-frame counters for the log */
 static volatile LONG g_shot_request;          /* F12 */
+/* Manual-testing aids (docs/TESTING.md): F10 writes a numbered marker into the log; F11 captures
+ * the next frame (screenshot, every draw with its state, the render-target textures) into
+ * captures\capture_NNN_<time>\. REJET_CAPTURE_AT=<frame> does the same at a given frame. */
+static volatile LONG g_mark_request, g_capture_request;
+static ULONG g_capture_frame = 0xFFFFFFFF; /* frame being captured */
+static char g_capture_dir[MAX_PATH];
+static FILE *g_capture_log;
+static const struct RenderTarget *g_cur_rt; /* the current render target, NULL = the back buffer */
 
 /* Log the first call of each not-yet-implemented entry point. */
 #define TODO_ONCE(name)                                                     \
@@ -85,8 +93,16 @@ static LRESULT CALLBACK wnd_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         log_printf("d3d: window closed; exiting\n");
         ExitProcess(0);
     }
-    if (m == WM_KEYDOWN && wp == VK_F12) {
+    if ((m == WM_KEYDOWN || m == WM_SYSKEYDOWN) && wp == VK_F12) {
         InterlockedExchange(&g_shot_request, 1);
+        return 0;
+    }
+    if ((m == WM_KEYDOWN || m == WM_SYSKEYDOWN) && wp == VK_F11) {
+        InterlockedExchange(&g_capture_request, 1);
+        return 0;
+    }
+    if ((m == WM_KEYDOWN || m == WM_SYSKEYDOWN) && wp == VK_F10) { /* F10 comes as a system key */
+        InterlockedIncrement(&g_mark_request);
         return 0;
     }
     return DefWindowProcW(w, m, wp, lp);
@@ -116,7 +132,7 @@ static DWORD WINAPI window_thread(void *arg)
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH); /* letterbox bars */
     RegisterClassExW(&wc);
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
-    g_wnd = CreateWindowW(L"rejet", L"Jet Set Radio Future (ReJet)", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT,
+    g_wnd = CreateWindowW(L"rejet", L"Jet Set Radio Future (ReJet)  -  F10 mark   F11 capture   F12 screenshot", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT,
                           CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, NULL, NULL, wc.hInstance, NULL);
     SetEvent(req->ready);
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
@@ -202,7 +218,9 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
     hp.BackBufferHeight = g_hh;
     hp.BackBufferFormat = D3DFMT_X8R8G8B8; /* the game asks for 16-bit R5G6B5; 32-bit avoids banding */
     hp.BackBufferCount = 1;
-    hp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    /* COPY keeps the back buffer's contents after Present: the boost effect blends the new frame
+     * over the previous one (its speed trails); with DISCARD the screen darkened instead. */
+    hp.SwapEffect = D3DSWAPEFFECT_COPY;
     hp.hDeviceWindow = g_wnd;
     hp.Windowed = TRUE;
     hp.EnableAutoDepthStencil = pp->EnableAutoDepthStencil;
@@ -294,6 +312,9 @@ static HRESULT XBAPI hle_D3DDevice_Clear(DWORD Count, const D3DRECT *pRects, DWO
         log_printf("survey: Clear count %lu flags %02lX colour %08lX z %.3f (from %08X)\n", Count, Flags, Color,
                    (double)Z, (unsigned)(UINT_PTR)_ReturnAddress());
     }
+    if (g_capture_log && g_frame == g_capture_frame)
+        fprintf(g_capture_log, "clear: count %lu flags %02lX colour %08lX z %.3f%s\n", Count, Flags, Color, (double)Z,
+                g_cur_rt ? " -> rt" : "");
     if (!g_dev)
         return S_OK;
     if (Count && pRects) {
@@ -432,16 +453,14 @@ static void present(void)
     IDirect3DDevice9Ex_PresentEx(g_dev, NULL, &d, NULL, NULL, 0);
 }
 
-/* Save the back buffer as a BMP (ReWhacked). */
-static void save_backbuffer(const char *name)
+/* Save a 32-bit render-target surface as a BMP (ReWhacked's back-buffer saver, generalised). */
+static void save_surface(IDirect3DSurface9 *bb, const char *name)
 {
-    IDirect3DSurface9 *bb = NULL, *sys = NULL;
+    IDirect3DSurface9 *sys = NULL;
     D3DSURFACE_DESC desc;
     D3DLOCKED_RECT lr;
     FILE *f;
 
-    if (FAILED(IDirect3DDevice9Ex_GetBackBuffer(g_dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)))
-        return;
     IDirect3DSurface9_GetDesc(bb, &desc);
     if (SUCCEEDED(IDirect3DDevice9Ex_CreateOffscreenPlainSurface(g_dev, desc.Width, desc.Height, desc.Format,
                                                                  D3DPOOL_SYSTEMMEM, &sys, NULL)) &&
@@ -468,7 +487,54 @@ static void save_backbuffer(const char *name)
     }
     if (sys)
         IDirect3DSurface9_Release(sys);
+}
+
+static void save_backbuffer(const char *name)
+{
+    IDirect3DSurface9 *bb = NULL;
+    if (FAILED(IDirect3DDevice9Ex_GetBackBuffer(g_dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)))
+        return;
+    save_surface(bb, name);
     IDirect3DSurface9_Release(bb);
+}
+
+static void capture_finish(void); /* render-target section */
+
+/* F10 / F11 / REJET_CAPTURE_AT, at the end of each frame (see g_capture_request). The capture
+ * covers the frame after the request, so its draws are logged from the start. */
+static void testing_hotkeys(void)
+{
+    static LONG marks_done;
+    static long capture_at = -2;
+    LONG marks = g_mark_request;
+    while (marks_done < marks) {
+        marks_done++;
+        log_printf("==================== MARK %ld at frame %lu ====================\n", marks_done, g_frame);
+    }
+    if (g_capture_log && g_frame == g_capture_frame) { /* the captured frame just ended */
+        capture_finish();
+        return;
+    }
+    if (capture_at == -2) {
+        char env[16] = "";
+        capture_at = GetEnvironmentVariableA("REJET_CAPTURE_AT", env, sizeof env) ? atol(env) : -1;
+    }
+    if ((InterlockedExchange(&g_capture_request, 0) || (capture_at >= 0 && g_frame + 1 == (ULONG)capture_at)) &&
+        !g_capture_log) {
+        static int n;
+        SYSTEMTIME t;
+        char path[MAX_PATH];
+        GetLocalTime(&t);
+        CreateDirectoryA("captures", NULL);
+        snprintf(g_capture_dir, sizeof g_capture_dir, "captures\\capture_%03d_%04u%02u%02u_%02u%02u%02u", ++n, t.wYear,
+                 t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+        CreateDirectoryA(g_capture_dir, NULL);
+        snprintf(path, sizeof path, "%s\\draws.txt", g_capture_dir);
+        g_capture_log = fopen(path, "w");
+        g_capture_frame = g_frame + 1;
+        log_printf("==================== CAPTURE %s (frame %lu) ====================\n", g_capture_dir,
+                   g_capture_frame);
+    }
 }
 
 /* F12: Screenshots\jsrf_<date>_<time>.bmp next to the loader. REJET_SHOTS=<n> (debugging):
@@ -514,6 +580,7 @@ static DWORD XBAPI hle_D3DDevice_Swap(DWORD Flags)
         g_in_scene = 0;
     }
     maybe_screenshot();
+    testing_hotkeys(); /* before Present: the back buffer still holds this frame */
     if (g_dev)
         present();
     perf_end(PERF_PRESENT, t0);
@@ -1193,8 +1260,11 @@ static void XBAPI hle_D3DDevice_SetRenderState_StencilFail(DWORD v)
     rs(D3DRS_STENCILFAIL, gl_stencilop(v));
 }
 
+static DWORD g_x_tfactor = 0xFFFFFFFF; /* the game's texture factor (apply_lazy_states borrows it) */
+
 static void XBAPI hle_D3DDevice_SetRenderState_TextureFactor(DWORD v)
 {
+    g_x_tfactor = v;
     rs(D3DRS_TEXTUREFACTOR, v);
 }
 
@@ -1336,9 +1406,22 @@ static HRESULT XBAPI hle_D3DDevice_GetTransform(DWORD State, D3DMATRIX *pMatrix)
     return S_OK;
 }
 
-/* D3DMATERIAL8 and D3DLIGHT8 share D3D9's layouts. */
+/* D3DMATERIAL8 and D3DLIGHT8 share D3D9's layouts. Copies are kept for lighting draws without
+ * normals (apply_lazy_states). */
+#define MAX_LIGHTS 8
+static D3DMATERIAL9 g_material;
+static D3DLIGHT9 g_light[MAX_LIGHTS];
+static BOOL g_light_on[MAX_LIGHTS];
+
 static HRESULT XBAPI hle_D3DDevice_SetMaterial(const D3DMATERIAL9 *pMaterial)
 {
+    if (pMaterial)
+        g_material = *pMaterial;
+    if (pMaterial && g_capture_log && g_frame == g_capture_frame)
+        fprintf(g_capture_log, "material: diffuse %.2f %.2f %.2f %.2f ambient %.2f %.2f %.2f emissive %.2f %.2f %.2f\n",
+                pMaterial->Diffuse.r, pMaterial->Diffuse.g, pMaterial->Diffuse.b, pMaterial->Diffuse.a,
+                pMaterial->Ambient.r, pMaterial->Ambient.g, pMaterial->Ambient.b, pMaterial->Emissive.r,
+                pMaterial->Emissive.g, pMaterial->Emissive.b);
     if (g_dev && pMaterial)
         IDirect3DDevice9Ex_SetMaterial(g_dev, pMaterial);
     return S_OK;
@@ -1346,6 +1429,12 @@ static HRESULT XBAPI hle_D3DDevice_SetMaterial(const D3DMATERIAL9 *pMaterial)
 
 static HRESULT XBAPI hle_D3DDevice_SetLight(DWORD Index, const D3DLIGHT9 *pLight)
 {
+    if (pLight && g_capture_log && g_frame == g_capture_frame)
+        fprintf(g_capture_log, "light %lu: type %d diffuse %.2f %.2f %.2f ambient %.2f %.2f %.2f dir %.2f %.2f %.2f\n",
+                Index, (int)pLight->Type, pLight->Diffuse.r, pLight->Diffuse.g, pLight->Diffuse.b, pLight->Ambient.r,
+                pLight->Ambient.g, pLight->Ambient.b, pLight->Direction.x, pLight->Direction.y, pLight->Direction.z);
+    if (pLight && Index < MAX_LIGHTS)
+        g_light[Index] = *pLight;
     if (g_dev && pLight)
         IDirect3DDevice9Ex_SetLight(g_dev, Index, pLight);
     return S_OK;
@@ -1353,6 +1442,8 @@ static HRESULT XBAPI hle_D3DDevice_SetLight(DWORD Index, const D3DLIGHT9 *pLight
 
 static HRESULT XBAPI hle_D3DDevice_LightEnable(DWORD Index, BOOL Enable)
 {
+    if (Index < MAX_LIGHTS)
+        g_light_on[Index] = Enable;
     if (g_dev)
         IDirect3DDevice9Ex_LightEnable(g_dev, Index, Enable);
     return S_OK;
@@ -1401,7 +1492,6 @@ typedef struct RenderTarget {
 } RenderTarget;
 static RenderTarget g_rt[MAX_RT];
 static unsigned g_rt_count;
-static const RenderTarget *g_cur_rt; /* NULL = the back buffer */
 
 static const RenderTarget *rt_find(DWORD data)
 {
@@ -1497,6 +1587,39 @@ static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, X
     g_cur_rt = r;
     set_target_metrics(r->w, r->h, (float)r->hw / (float)r->w, (float)r->hh / (float)r->h);
     return S_OK;
+}
+
+/* End of a captured frame: the screenshot, each render-target texture as the game left it, and
+ * a summary, next to the draw list. */
+static void capture_finish(void)
+{
+    char path[MAX_PATH];
+    FILE *f;
+    snprintf(path, sizeof path, "%s\\screen.bmp", g_capture_dir);
+    save_backbuffer(path);
+    for (unsigned i = 0; i < g_rt_count; i++) {
+        snprintf(path, sizeof path, "%s\\rendertarget%u_%ux%u.bmp", g_capture_dir, i, g_rt[i].w, g_rt[i].h);
+        save_surface(g_rt[i].surf, path);
+    }
+    fclose(g_capture_log);
+    g_capture_log = NULL;
+    snprintf(path, sizeof path, "%s\\info.txt", g_capture_dir);
+    if ((f = fopen(path, "w")) != NULL) {
+        fprintf(f, "frame %lu, vblank %lu, %lu draws\nrender %ux%u, game %ux%u\nrender targets: %u\n", g_frame,
+                vblank_now(), g_draws, g_hw, g_hh, g_xw, g_xh, g_rt_count);
+        for (unsigned i = 0; i < g_rt_count; i++)
+            fprintf(f, "  #%u: %ux%u%s, Xbox data %08lX, host %ux%u\n", i, g_rt[i].w, g_rt[i].h,
+                    g_rt[i].linear ? " linear" : "", g_rt[i].data, g_rt[i].hw, g_rt[i].hh);
+        fprintf(f, "Xbox render-state array at 0x19EBA0 (index: values), at the end of the frame:\n");
+        for (unsigned i = 0; i < 0xC0; i += 8) {
+            const DWORD *x = (const DWORD *)(UINT_PTR)0x0019EBA0u + i;
+            fprintf(f, "  %3u: %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX\n", i, x[0], x[1], x[2], x[3], x[4],
+                    x[5], x[6], x[7]);
+        }
+        fclose(f);
+    }
+    log_printf("==================== CAPTURE done: %s ====================\n", g_capture_dir);
+    g_capture_frame = 0xFFFFFFFF;
 }
 
 /* CopyRects(src, rects, count, dst, points): surface-to-surface copies on the GPU. JSRF's boost
@@ -1612,32 +1735,121 @@ static HRESULT XBAPI hle_D3DDevice_SetStreamSource(UINT Stream, XD3DResource *pS
 /* Debugging: REJET_DRAWLOG=<frame> lists that frame's draws with the states that decide how
  * they look (shader, texture, blend, alpha test, depth, stencil, cull). */
 static DWORD g_dl_prim, g_dl_count;
+static const BYTE *g_dl_verts; /* a small draw-up's vertices, dumped into captures */
+static UINT g_dl_stride;
 
 static void draw_log(void)
 {
     static long at = -2;
     const XD3DPixelContainer *t = g_textures[0];
+    char line[512];
+    int capture = g_capture_log && g_frame == g_capture_frame;
     if (at == -2) {
         char env[16] = "";
         at = GetEnvironmentVariableA("REJET_DRAWLOG", env, sizeof env) ? atol(env) : -1;
     }
-    if (at < 0 || g_frame != (ULONG)at)
+    if (!capture && (at < 0 || g_frame != (ULONG)at))
         return;
-    log_printf("drawlog %4lu: prim %lu x%-5lu %s %-4lu ps %-3ld t0 %02X %4ux%-4u%s blend %lu %lu/%lu at %lu/%lu z %lu/%lu/%lu "
-               "st %lu/%lu/%lu/%lu cull %lX front %lX cw %lX%s\n",
-               g_draws, g_dl_prim, g_dl_count, (g_cur_vs & 1) ? "vs " : "fvf", (g_cur_vs & 1) ? g_cur_vs >> 1 : g_cur_vs,
-               (g_cur_ps & 1) ? (long)(g_cur_ps >> 1) : -1L, t ? XFMT_FORMAT(t->Format) : 0,
-               t ? (t->Size ? XSIZE_WIDTH(t->Size) : 1u << XFMT_USIZE(t->Format)) : 0,
-               t ? (t->Size ? XSIZE_HEIGHT(t->Size) : 1u << XFMT_VSIZE(t->Format)) : 0,
-               t && rt_find(t->Resource.Data) ? " (rt)" : "", g_rs[D3DRS_ALPHABLENDENABLE], g_rs[D3DRS_SRCBLEND],
-               g_rs[D3DRS_DESTBLEND], g_rs[D3DRS_ALPHATESTENABLE], g_rs[D3DRS_ALPHAREF], g_rs[D3DRS_ZENABLE],
-               g_rs[D3DRS_ZWRITEENABLE], g_rs[D3DRS_ZFUNC], g_rs[D3DRS_STENCILENABLE], g_rs[D3DRS_STENCILFUNC],
-               g_rs[D3DRS_STENCILREF], g_rs[D3DRS_STENCILPASS], g_x_cull, g_x_front, g_rs[D3DRS_COLORWRITEENABLE],
-               g_cur_rt ? " -> rt" : "");
-    if (g_rs[D3DRS_STENCILENABLE])
-        log_printf("drawlog       stencil mask %08lX write %08lX fail %lu zfail %lu pass %lu\n", g_rs[D3DRS_STENCILMASK],
-                   g_rs[D3DRS_STENCILWRITEMASK], g_rs[D3DRS_STENCILFAIL], g_rs[D3DRS_STENCILZFAIL],
-                   g_rs[D3DRS_STENCILPASS]);
+    snprintf(line, sizeof line,
+             "drawlog %4lu: prim %lu x%-5lu %s %-4lu ps %-3ld t0 %02X %4ux%-4u%s @%08X blend %lu %lu/%lu at %lu/%lu "
+             "z %lu/%lu/%lu st %lu/%lu/%lu/%lu cull %lX front %lX%s",
+             g_draws, g_dl_prim, g_dl_count, (g_cur_vs & 1) ? "vs " : "fvf", (g_cur_vs & 1) ? g_cur_vs >> 1 : g_cur_vs,
+             (g_cur_ps & 1) ? (long)(g_cur_ps >> 1) : -1L, t ? XFMT_FORMAT(t->Format) : 0,
+             t ? (t->Size ? XSIZE_WIDTH(t->Size) : 1u << XFMT_USIZE(t->Format)) : 0,
+             t ? (t->Size ? XSIZE_HEIGHT(t->Size) : 1u << XFMT_VSIZE(t->Format)) : 0,
+             t && rt_find(t->Resource.Data) ? " (rt)" : "", t ? t->Resource.Data : 0, g_rs[D3DRS_ALPHABLENDENABLE],
+             g_rs[D3DRS_SRCBLEND], g_rs[D3DRS_DESTBLEND], g_rs[D3DRS_ALPHATESTENABLE], g_rs[D3DRS_ALPHAREF],
+             g_rs[D3DRS_ZENABLE], g_rs[D3DRS_ZWRITEENABLE], g_rs[D3DRS_ZFUNC], g_rs[D3DRS_STENCILENABLE],
+             g_rs[D3DRS_STENCILFUNC], g_rs[D3DRS_STENCILREF], g_rs[D3DRS_STENCILPASS], g_x_cull, g_x_front,
+             g_cur_rt ? " -> rt" : "");
+    if (capture) {
+        fprintf(g_capture_log, "%s\n", line + 8);
+        fprintf(g_capture_log,
+                "      stage0 colorop %lu args %lX %lX alphaop %lu args %lX %lX | viewport %ld,%ld-%ld,%ld%s | lighting %lu\n",
+                XTEXTURE_STATE[0][12], XTEXTURE_STATE[0][14], XTEXTURE_STATE[0][15], XTEXTURE_STATE[0][16],
+                XTEXTURE_STATE[0][18], XTEXTURE_STATE[0][19], g_vp_rect.left, g_vp_rect.top, g_vp_rect.right,
+                g_vp_rect.bottom, g_vp_partial ? " (clipped)" : "", g_rs[D3DRS_LIGHTING]);
+        if (g_dl_verts) /* full-screen quads and the like: their raw vertices */
+            for (DWORD v = 0; v < g_dl_count; v++) {
+                const DWORD *d = (const DWORD *)(g_dl_verts + v * g_dl_stride);
+                fprintf(g_capture_log, "      v%lu:", v);
+                for (UINT k = 0; k < g_dl_stride / 4; k++)
+                    fprintf(g_capture_log, " %08lX", d[k]);
+                fprintf(g_capture_log, "\n");
+            }
+    }
+    else {
+        log_printf("%s\n", line);
+    }
+}
+
+/* Lighting states that D3D applies lazily at draw time: the engine writes them straight into
+ * D3D's render-state array at 0x19EBA0 (XDK order: fog start/end at 84/85 and the 64.0 maximum
+ * point size at 113 confirm the indices). Only fixed-function draws use them; the map screen is
+ * drawn lit with materials, and came out white without them.
+ * Lit vertices without a normal: D3D9 gives them ambient light only (black here), while the
+ * NV2A keeps the last normal, which faces the light (the map's counter panel and icons). They
+ * are drawn unlit with the material's fully lit colour as the texture factor instead. */
+#define XRENDER_STATE ((const DWORD *)(UINT_PTR)0x0019EBA0u)
+
+static DWORD lit_colour_facing_light(void)
+{
+    const D3DMATERIAL9 *m = &g_material;
+    DWORD a = XRENDER_STATE[105];
+    float c[3] = {m->Emissive.r + m->Ambient.r * ((a >> 16) & 0xFF) / 255.0f,
+                  m->Emissive.g + m->Ambient.g * ((a >> 8) & 0xFF) / 255.0f,
+                  m->Emissive.b + m->Ambient.b * (a & 0xFF) / 255.0f};
+    DWORD out = 0;
+    for (unsigned i = 0; i < MAX_LIGHTS; i++) {
+        if (!g_light_on[i])
+            continue;
+        c[0] += g_light[i].Ambient.r * m->Ambient.r + g_light[i].Diffuse.r * m->Diffuse.r;
+        c[1] += g_light[i].Ambient.g * m->Ambient.g + g_light[i].Diffuse.g * m->Diffuse.g;
+        c[2] += g_light[i].Ambient.b * m->Ambient.b + g_light[i].Diffuse.b * m->Diffuse.b;
+    }
+    for (unsigned i = 0; i < 3; i++)
+        out |= (DWORD)(c[i] < 0 ? 0 : c[i] > 1 ? 255 : c[i] * 255 + 0.5f) << (16 - 8 * i);
+    return out | (DWORD)(m->Diffuse.a < 0 ? 0 : m->Diffuse.a > 1 ? 255 : m->Diffuse.a * 255 + 0.5f) << 24;
+}
+
+static void apply_lazy_states(void)
+{
+    int lit = XRENDER_STATE[92] != 0 && (g_cur_vs & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW;
+    if (lit && !(g_cur_vs & D3DFVF_NORMAL)) {
+        rs(D3DRS_LIGHTING, FALSE);
+        if (!(g_cur_vs & D3DFVF_DIFFUSE)) {
+            rs(D3DRS_TEXTUREFACTOR, lit_colour_facing_light());
+            for (DWORD s = 0; s < 4 && XTEXTURE_STATE[s][12] > 1; s++) { /* 1 = disable */
+                static const D3DTEXTURESTAGESTATETYPE arg[6] = {D3DTSS_COLORARG0, D3DTSS_COLORARG1,
+                    D3DTSS_COLORARG2, D3DTSS_ALPHAARG0, D3DTSS_ALPHAARG1, D3DTSS_ALPHAARG2};
+                static const int idx[6] = {13, 14, 15, 17, 18, 19};
+                if (s == 0 && !g_textures[0]) { /* the empty-stage rule disabled it: vertex colour */
+                    IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+                    IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_COLORARG1, D3DTA_TFACTOR);
+                    IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+                    IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, D3DTSS_ALPHAARG1, D3DTA_TFACTOR);
+                    break;
+                }
+                for (int k = 0; k < 6; k++) {
+                    DWORD v = XTEXTURE_STATE[s][idx[k]];
+                    if ((v & D3DTA_SELECTMASK) == D3DTA_DIFFUSE)
+                        IDirect3DDevice9Ex_SetTextureStageState(g_dev, s, arg[k], (v & ~D3DTA_SELECTMASK) | D3DTA_TFACTOR);
+                }
+            }
+        }
+        return;
+    }
+    if (g_rs[D3DRS_TEXTUREFACTOR] != g_x_tfactor)
+        rs(D3DRS_TEXTUREFACTOR, g_x_tfactor);
+    rs(D3DRS_LIGHTING, lit);
+    rs(D3DRS_SPECULARENABLE, XRENDER_STATE[93] != 0);
+    rs(D3DRS_LOCALVIEWER, XRENDER_STATE[94] != 0);
+    rs(D3DRS_COLORVERTEX, XRENDER_STATE[95] != 0);
+    rs(D3DRS_SPECULARMATERIALSOURCE, XRENDER_STATE[100]);
+    rs(D3DRS_DIFFUSEMATERIALSOURCE, XRENDER_STATE[101]);
+    rs(D3DRS_AMBIENTMATERIALSOURCE, XRENDER_STATE[102]);
+    rs(D3DRS_EMISSIVEMATERIALSOURCE, XRENDER_STATE[103]);
+    rs(D3DRS_AMBIENT, XRENDER_STATE[105]);
 }
 
 /* Bind the current vertex program (or FVF), constants, textures and pixel shader (ReWhacked).
@@ -1755,6 +1967,8 @@ static int prepare_draw(void)
         }
     }
     IDirect3DDevice9Ex_SetVertexShaderConstantF(g_dev, 0, g_vconst[0], VSH_CONSTANTS);
+    if (!(g_cur_vs & 1))
+        apply_lazy_states();
     if ((g_cur_vs & 1) && g_rs[D3DRS_STENCILENABLE] && g_rs[D3DRS_STENCILPASS] >= D3DSTENCILOP_INCRSAT) {
         static BYTE seen[MAX_SHADERS];
         unsigned i = g_cur_vs >> 1;
@@ -1764,6 +1978,7 @@ static int prepare_draw(void)
         }
     }
     draw_log();
+    g_dl_verts = NULL;
     g_draws++;
     return 1;
 }
@@ -1788,17 +2003,78 @@ static int convert_prim(DWORD xprim, UINT count, D3DPRIMITIVETYPE *pt, UINT *pri
 
 static WORD g_quad_idx[65536 / 4 * 6];
 
-/* Pre-transformed (XYZRHW) vertices are in Xbox screen pixels; at another render resolution
- * they are copied with x and y scaled. Their z is already 0..1, as on the PC (scaling it as
- * depth-buffer units squeezed every 2D element to ~0 and hid the speech bubbles behind the
- * letterbox bars). Vertices first..last of `verts` are converted; the returned pointer is used
- * with the same indices. */
-static const BYTE *scale_rhw(const BYTE *verts, UINT first, UINT last, UINT stride)
+/* Byte offset of texture coordinate set `set` in an FVF vertex, or -1. */
+static int fvf_texcoord_offset(DWORD fvf, unsigned set)
+{
+    int off;
+    unsigned n = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+    static const int size[4] = {8, 12, 16, 4}; /* D3DFVF_TEXCOORDSIZE2, 3, 4, 1 */
+    switch (fvf & D3DFVF_POSITION_MASK) {
+    case D3DFVF_XYZ: off = 12; break;
+    case D3DFVF_XYZRHW: off = 16; break;
+    case D3DFVF_XYZB1: off = 16; break;
+    case D3DFVF_XYZB2: off = 20; break;
+    case D3DFVF_XYZB3: off = 24; break;
+    case D3DFVF_XYZB4: off = 28; break;
+    case D3DFVF_XYZB5: off = 32; break;
+    default: return -1;
+    }
+    if (fvf & D3DFVF_NORMAL)
+        off += 12;
+    if (fvf & D3DFVF_PSIZE)
+        off += 4;
+    if (fvf & D3DFVF_DIFFUSE)
+        off += 4;
+    if (fvf & D3DFVF_SPECULAR)
+        off += 4;
+    if (set >= n)
+        return -1;
+    for (unsigned i = 0; i < set; i++)
+        off += size[(fvf >> (16 + 2 * i)) & 3];
+    return off;
+}
+
+/* Fixed-function vertices that need converting for the host, copied first..last (the returned
+ * pointer is used with the same indices):
+ * - pre-transformed (XYZRHW) positions are in Xbox screen pixels: x and y scaled to the render
+ *   resolution. Their z is already 0..1, as on the PC (scaling it as depth-buffer units hid the
+ *   speech bubbles behind the letterbox bars);
+ * - stages sampling a linear (texel-addressed) texture, render targets included, have their
+ *   texture coordinates scaled to 0..1. Vertex programs get this through VSH_C_TEXSCALE; JSRF's
+ *   boost draws its render target onto the screen with a fixed-function quad in texels, which
+ *   read a single edge texel (a flat grey screen) until this. */
+static const BYTE *fix_ff_vertices(const BYTE *verts, UINT first, UINT last, UINT stride)
 {
     static BYTE *buf;
     static size_t cap;
     size_t need = (size_t)(last + 1) * stride;
-    if ((g_cur_vs & 1) || (g_cur_vs & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW || (g_tsx == 1.0f && g_tsy == 1.0f))
+    int rhw, nscale = 0, off[4];
+    float su[4], sv[4];
+    if (g_cur_vs & 1)
+        return verts;
+    rhw = (g_cur_vs & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW && (g_tsx != 1.0f || g_tsy != 1.0f);
+    for (unsigned s = 0; s < 4; s++) {
+        const XD3DPixelContainer *t = g_textures[s];
+        const RenderTarget *r = t ? rt_find(t->Resource.Data) : NULL;
+        UINT w = 0, h = 0;
+        if (r && r->linear) {
+            w = r->w;
+            h = r->h;
+        }
+        else if (t && !r && t->Size) {
+            w = XSIZE_WIDTH(t->Size);
+            h = XSIZE_HEIGHT(t->Size);
+        }
+        if (!w || !h)
+            continue;
+        off[nscale] = fvf_texcoord_offset(g_cur_vs, XTEXTURE_STATE[s][28] & 0xFFFF);
+        if (off[nscale] < 0 || off[nscale] + 8 > (int)stride)
+            continue;
+        su[nscale] = 1.0f / (float)w;
+        sv[nscale] = 1.0f / (float)h;
+        nscale++;
+    }
+    if (!rhw && !nscale)
         return verts;
     if (need > cap) {
         BYTE *n = (BYTE *)realloc(buf, need);
@@ -1808,10 +2084,17 @@ static const BYTE *scale_rhw(const BYTE *verts, UINT first, UINT last, UINT stri
         cap = need;
     }
     for (UINT i = first; i <= last; i++) {
-        float *xy = (float *)(buf + (size_t)i * stride);
-        memcpy(xy, verts + (size_t)i * stride, stride);
-        xy[0] *= g_tsx;
-        xy[1] *= g_tsy;
+        BYTE *v = buf + (size_t)i * stride;
+        memcpy(v, verts + (size_t)i * stride, stride);
+        if (rhw) {
+            ((float *)v)[0] *= g_tsx;
+            ((float *)v)[1] *= g_tsy;
+        }
+        for (int k = 0; k < nscale; k++) {
+            float *uv = (float *)(v + off[k]);
+            uv[0] *= su[k];
+            uv[1] *= sv[k];
+        }
     }
     return buf;
 }
@@ -1825,6 +2108,10 @@ static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, con
     LONGLONG t0 = perf_now();
     g_dl_prim = xprim;
     g_dl_count = count;
+    if (!idx && count <= 8 && stride <= 64) {
+        g_dl_verts = verts;
+        g_dl_stride = stride;
+    }
     if (!verts || !stride || !convert_prim(xprim, count, &pt, &prims, &quads) || !prepare_draw())
         return;
     { /* TEMPORARY shadow debugging: REJET_SHADOWDEBUG=1 draws the stencil-tested darkening quad red
@@ -1876,11 +2163,11 @@ static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, con
             if (idx[i] > hi)
                 hi = idx[i];
         }
-        verts = scale_rhw(verts, lo, hi, stride);
+        verts = fix_ff_vertices(verts, lo, hi, stride);
         IDirect3DDevice9Ex_DrawIndexedPrimitiveUP(g_dev, pt, lo, hi - lo + 1, prims, idx, D3DFMT_INDEX16, verts, stride);
     }
     else {
-        verts = scale_rhw(verts, 0, count - 1, stride);
+        verts = fix_ff_vertices(verts, 0, count - 1, stride);
         IDirect3DDevice9Ex_DrawPrimitiveUP(g_dev, pt, prims, verts, stride);
     }
     perf_end(PERF_DRAW, t0);
