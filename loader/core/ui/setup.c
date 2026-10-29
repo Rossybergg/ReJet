@@ -4,7 +4,7 @@
  * (no files found) this screen asks for the disc image or an extracted folder, checks that its
  * Default.xbe is the PAL release ReJet supports (SHA-1, hle_xbe_supported), and extracts an
  * image into Game\ next to ReJet.exe, with progress. The folder is remembered in
- * rejet.ini ([Game] Folder). The window is drawn with GDI in the ReJet menu's style (the game's
+ * rejet.ini ([Game] Folder). The window is drawn with GDI in the ReJet menu's Garage style (the game's
  * Direct3D device doesn't exist yet); mouse, keyboard and controller all work.
  *
  * Disc images: XDVDFS ("MICROSOFT*XBOX*MEDIA" at sector 32 of the game partition), either a
@@ -276,12 +276,18 @@ static RECT button_rect(RECT c, int i)
     RECT r;
     r.left = S(80);
     r.right = c.right - S(80);
-    r.top = S(300) + i * S(64);
-    r.bottom = r.top + S(50);
+    r.top = S(310) + i * S(62);
+    r.bottom = r.top + S(48);
     return r;
 }
 
-/* ---- drawing (GDI, the ReJet menu's colours) */
+/* ---- drawing (GDI, the ReJet menu's Garage look: yellow field, orange bars, black ink) */
+
+#define G_FIELD RGB(255, 194, 26)
+#define G_ORANGE RGB(243, 154, 30)
+#define G_CYAN RGB(55, 184, 200)
+#define G_INK RGB(17, 17, 17)
+#define G_TINT RGB(236, 180, 24) /* an unselected row: the field a shade darker */
 
 static void fill_skew(HDC dc, int x0, int y0, int x1, int y1, int skew, COLORREF c)
 {
@@ -296,11 +302,24 @@ static void fill_skew(HDC dc, int x0, int y0, int x1, int y1, int skew, COLORREF
     DeleteObject(pen);
 }
 
+static void fill(HDC dc, int x0, int y0, int x1, int y1, COLORREF c)
+{
+    fill_skew(dc, x0, y0, x1, y1, 0, c);
+}
+
+/* A box with a black outline o pixels thick. */
+static void outlined(HDC dc, int x0, int y0, int x1, int y1, int o, COLORREF c)
+{
+    fill(dc, x0, y0, x1, y1, G_INK);
+    fill(dc, x0 + o, y0 + o, x1 - o, y1 - o, c);
+}
+
+/* Bahnschrift (Windows 10 and later), as the in-game menu; heavy = the condensed label face. */
 static void text_at(HDC dc, const WCHAR *s, RECT r, int size, int heavy, COLORREF c, UINT fmt)
 {
-    HFONT f = CreateFontW(-S(size), 0, 0, 0, heavy ? FW_HEAVY : FW_SEMIBOLD, heavy, 0, 0, DEFAULT_CHARSET,
-                          OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
-                          heavy ? L"Arial Black" : L"Segoe UI");
+    HFONT f = CreateFontW(-S(size), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS,
+                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                          heavy ? L"Bahnschrift SemiBold Condensed" : L"Bahnschrift");
     HGDIOBJ old = SelectObject(dc, f);
     SetTextColor(dc, c);
     SetBkMode(dc, TRANSPARENT);
@@ -344,26 +363,39 @@ static void draw_logo(HDC dc, int x, int y, int h)
 
 static void paint(HWND w)
 {
+    static const int bars[][2] = {{0, 22}, {36, 40}, {90, 16}, {120, 54}, {188, 20}};
     PAINTSTRUCT ps;
     RECT c, r;
     HDC wdc = BeginPaint(w, &ps), dc;
     HBITMAP back;
-    HBRUSH bg;
     WCHAR msg[512], cur[260];
     GetClientRect(w, &c);
     dc = CreateCompatibleDC(wdc);
     back = CreateCompatibleBitmap(wdc, c.right, c.bottom);
     SelectObject(dc, back);
-    bg = CreateSolidBrush(RGB(10, 26, 28));
-    FillRect(dc, &c, bg);
-    DeleteObject(bg);
-    fill_skew(dc, c.right - S(260), 0, c.right - S(170), c.bottom, -S(220), RGB(20, 44, 30));
-    fill_skew(dc, c.right - S(140), 0, c.right - S(100), c.bottom, -S(220), RGB(40, 20, 34));
+    fill(dc, 0, 0, c.right, c.bottom, G_FIELD);
+    for (int i = 0; i < 5; i++) /* the Garage's orange bars */
+        fill(dc, S(48 + bars[i][0]), 0, S(48 + bars[i][0] + bars[i][1]), S(56), G_ORANGE);
+    fill(dc, c.right - S(150), 0, c.right - S(132), S(56), G_ORANGE);
+    fill(dc, c.right - S(118), 0, c.right - S(86), S(56), G_ORANGE);
 
-    /* title strip */
-    fill_skew(dc, -S(40), S(40), S(620), S(150), S(36), RGB(200, 240, 30));
-    fill_skew(dc, -S(40), S(142), S(580), S(156), S(36), RGB(255, 45, 138));
-    draw_logo(dc, S(50), S(58), S(74));
+    /* the logo as drawn (black) and a cyan tag */
+    draw_logo(dc, S(50), S(78), S(62));
+    {
+        int lw = 0, tx, tw = S(110);
+        const DWORD *px;
+        UINT lwp, lhp;
+        if (menu_logo(&px, &lwp, &lhp))
+            lw = MulDiv(S(62), (int)lwp, (int)lhp);
+        tx = S(50) + lw + S(18);
+        fill_skew(dc, tx, S(102), tx + tw, S(136), -S(5), G_INK);
+        fill_skew(dc, tx + S(3), S(105), tx + tw - S(3), S(133), -S(5), G_CYAN);
+        r.left = tx;
+        r.right = tx + tw - S(4);
+        r.top = S(102);
+        r.bottom = S(136);
+        text_at(dc, L"SETUP", r, 20, 1, G_INK, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     r.left = S(80);
     r.right = c.right - S(60);
     r.top = S(180);
@@ -378,42 +410,60 @@ static void paint(HWND w)
         text_at(dc,
                 L"Welcome to ReJet! Pick your Jet Set Radio Future disc image and ReJet will set everything up "
                 L"for you. Already extracted the game? Choose its folder instead.",
-                r, 17, 0, RGB(255, 255, 255), DT_LEFT | DT_WORDBREAK);
+                r, 18, 0, G_INK, DT_LEFT | DT_WORDBREAK);
     else if (g_state == ST_WORKING) {
         WCHAR line[400];
         double f = g_total_bytes ? (double)g_done_bytes / (double)g_total_bytes : 0;
-        RECT bar = {S(80), S(230), c.right - S(80), S(250)}, fillr = bar;
-        HBRUSH b1 = CreateSolidBrush(RGB(40, 60, 62)), b2 = CreateSolidBrush(RGB(200, 240, 30));
+        int x0 = S(80), x1 = c.right - S(80);
         swprintf(line, 400, L"Setting things up... %.0f%%", f * 100);
-        text_at(dc, line, r, 17, 0, RGB(255, 255, 255), DT_LEFT | DT_SINGLELINE);
-        FillRect(dc, &bar, b1);
-        fillr.right = bar.left + (LONG)((bar.right - bar.left) * f);
-        FillRect(dc, &fillr, b2);
-        DeleteObject(b1);
-        DeleteObject(b2);
-        r.top = S(258);
-        text_at(dc, cur, r, 13, 0, RGB(154, 164, 164), DT_LEFT | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+        text_at(dc, line, r, 18, 0, G_INK, DT_LEFT | DT_SINGLELINE);
+        outlined(dc, x0, S(226), x1, S(252), S(3), RGB(255, 226, 140));
+        fill(dc, x0 + S(3), S(229), x0 + S(3) + (int)((x1 - x0 - S(6)) * f), S(249), G_CYAN);
+        r.top = S(260);
+        text_at(dc, cur, r, 14, 0, RGB(90, 74, 16), DT_LEFT | DT_SINGLELINE | DT_PATH_ELLIPSIS);
     }
-    else if (g_state == ST_ERROR)
-        text_at(dc, msg, r, 17, 0, RGB(255, 45, 138), DT_LEFT | DT_WORDBREAK);
+    else if (g_state == ST_ERROR) { /* on a black strip, so it reads as a problem */
+        RECT t = {S(80) + S(18), S(172), c.right - S(80) - S(14), S(286)};
+        fill(dc, S(80), S(168), S(90), S(290), G_INK);
+        fill(dc, S(94), S(168), c.right - S(80), S(290), G_INK);
+        text_at(dc, msg, t, 18, 0, RGB(255, 255, 255), DT_LEFT | DT_WORDBREAK);
+    }
     else
-        text_at(dc, L"All set! Starting the game...", r, 17, 0, RGB(255, 255, 255), DT_LEFT | DT_SINGLELINE);
+        text_at(dc, L"All set! Starting the game...", r, 18, 0, G_INK, DT_LEFT | DT_SINGLELINE);
 
     for (int i = 0; i < button_count() && g_state != ST_DONE; i++) {
         RECT b = button_rect(c, i);
         const WCHAR *label = g_state == ST_WELCOME ? WELCOME_BUTTONS[i] : g_state == ST_WORKING ? L"Cancel" : L"Back";
-        int on = i == g_sel;
-        fill_skew(dc, b.left, b.top, b.right, b.bottom, S(14), on ? RGB(200, 240, 30) : RGB(24, 48, 50));
-        if (on)
-            fill_skew(dc, b.left, b.top, b.left + S(10), b.bottom, S(14), RGB(255, 45, 138));
-        b.left += S(30);
-        text_at(dc, label, b, 20, 1, on ? RGB(0, 0, 0) : RGB(255, 255, 255), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        WCHAR up[64];
+        int on = i == g_sel, k;
+        for (k = 0; label[k] && k < 63; k++)
+            up[k] = towupper(label[k]);
+        up[k] = 0;
+        if (on) { /* lifted onto white with a black drop shadow, as the in-game menu */
+            fill(dc, b.left + S(6), b.top + S(6), b.right + S(6), b.bottom + S(6), G_INK);
+            outlined(dc, b.left - S(4), b.top - S(4), b.right - S(4), b.bottom - S(4), S(3), RGB(255, 255, 255));
+            OffsetRect(&b, -S(4), -S(4));
+        }
+        else {
+            fill(dc, b.left, b.top, b.right, b.bottom, G_TINT);
+            fill(dc, b.left, b.top, b.left + S(5), b.bottom, G_INK);
+        }
+        b.left += S(22);
+        text_at(dc, up, b, 24, 1, G_INK, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (on) {
+            b.right -= S(18);
+            text_at(dc, L">", b, 24, 1, G_INK, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        }
     }
-    r.top = c.bottom - S(40);
-    r.bottom = c.bottom - S(12);
-    text_at(dc, L"Mouse, arrow keys + Enter, or a controller (d-pad + A)", r, 13, 0, RGB(154, 164, 164),
-            DT_LEFT | DT_SINGLELINE);
-    text_at(dc, L"ReJet " TEXT(REJET_BUILD), r, 13, 0, RGB(154, 164, 164), DT_RIGHT | DT_SINGLELINE);
+    /* the black button bar */
+    fill(dc, 0, c.bottom - S(46), c.right, c.bottom, G_INK);
+    r.left = S(24);
+    r.right = c.right - S(20);
+    r.top = c.bottom - S(46);
+    r.bottom = c.bottom;
+    text_at(dc, L"Mouse, arrow keys + Enter, or a controller (d-pad + A)", r, 14, 0, RGB(255, 255, 255),
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    text_at(dc, L"ReJet " TEXT(REJET_BUILD), r, 14, 0, RGB(201, 201, 201), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
     BitBlt(wdc, 0, 0, c.right, c.bottom, dc, 0, 0, SRCCOPY);
     DeleteObject(back);

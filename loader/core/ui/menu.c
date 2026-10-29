@@ -38,6 +38,11 @@ static MenuHost g_host;
 #define C_BLACK   0xFF000000u
 #define C_PANEL   0xE00A1A1Cu
 #define C_SHADE   0x99000000u
+/* the Garage look (draw_menu) */
+#define C_FIELD   0xFFFFC21Au
+#define C_ORANGE  0xFFF39A1Eu
+#define C_CYAN    0xFF37B8C8u
+#define C_INK     0xFF111111u
 
 static DWORD with_alpha(DWORD c, float a)
 {
@@ -695,8 +700,8 @@ static void toast_for(ULONGLONG ms, const char *fmt, ...)
 }
 
 /* Toast text with controller buttons: "[A]", "[Start]", "[Back]", "[LB]" etc. are drawn as
- * button icons `h` tall. Returns the width; draws only when `draw` is set. */
-static float rich_text(float x, float y, float h, const char *s, int draw)
+ * button icons `h` tall, the rest in colour c. Returns the width; draws only when `draw` is set. */
+static float rich_text(float x, float y, float h, const char *s, int draw, DWORD c)
 {
     static const char *const names[] = {"A", "B", "X", "Y", "LB", "RB", "LT", "RT", "Start", "Back", "D-pad"};
     float x0 = x;
@@ -715,7 +720,7 @@ static float rich_text(float x, float y, float h, const char *s, int draw)
         memcpy(seg, s, n);
         seg[n] = 0;
         if (draw)
-            text(FONT_SMALL, x, y, 0, C_WHITE, seg);
+            text(FONT_SMALL, x, y, 0, c, seg);
         x += text_width(FONT_SMALL, seg);
         s += n;
         if (b >= 0) {
@@ -739,13 +744,16 @@ static void draw_toasts(void)
     for (int i = 0; i < g_ntoasts; i++) {
         float age = (float)(now - g_toasts[i].at), end = (float)g_toasts[i].ms;
         float a = age < 150 ? age / 150 : age > end - 500 ? (end - age) / 500 : 1;
-        float w = rich_text(0, 0, 30, g_toasts[i].text, 0);
+        float w = rich_text(0, 0, 30, g_toasts[i].text, 0, C_INK);
         float dx = -(w + 120) * (1 - ease_out(age / 260)); /* slides in from the left */
         float saved = g_fade;
         g_fade = a;
-        box(24 + dx, y, 24 + dx + w + 44, y + 40, 10, C_PANEL);
-        box(24 + dx, y, 32 + dx, y + 40, 10, C_LIME);
-        rich_text(46 + dx, y + 6, 30, g_toasts[i].text, 1);
+        /* a Garage tag: yellow, outlined in black, with a drop shadow and an orange diagonal edge */
+        box(24 + dx + 6, y + 6, 24 + dx + w + 50, y + 46, 8, 0x80000000u);
+        box(24 + dx, y, 24 + dx + w + 44, y + 40, 8, C_INK);
+        box(27 + dx, y + 3, 21 + dx + w + 44, y + 37, 8, C_FIELD);
+        box(24 + dx, y, 38 + dx, y + 40, 8, C_ORANGE); /* the darker orange diagonal: black would vanish on dark scenes */
+        rich_text(46 + dx, y + 6, 30, g_toasts[i].text, 1, C_INK);
         g_fade = saved;
         y += 48 * (age < 200 ? ease_out(age / 200) : 1);
     }
@@ -777,8 +785,8 @@ static void draw_fps(void)
     if (!g_settings.show_fps)
         return;
     snprintf(s, sizeof s, "%.0f FPS", fps);
-    box(24, 18, 24 + text_width(FONT_SMALL, s) + 32, 56, 10, C_PANEL);
-    text(FONT_SMALL, 40, 24, 0, fps >= 58.5f ? C_LIME : C_PINK, s);
+    box(24, 18, 24 + text_width(FONT_SMALL, s) + 32, 56, 8, C_INK); /* black tag; cyan at full speed */
+    text(FONT_SMALL, 40, 24, 0, fps >= 58.5f ? C_CYAN : C_ORANGE, s);
 }
 
 /* ------------------------------------------------------------------ input */
@@ -1375,10 +1383,6 @@ static void draw_preview(void)
  * lifted onto white with a black drop shadow and its value in a cyan tag, the help line on a
  * black strip, and the button bar; a small tilted preview of the paused game sits on the right
  * (draw_preview, after the batch). */
-#define C_FIELD  0xFFFFC21Au
-#define C_ORANGE 0xFFF39A1Eu
-#define C_CYAN   0xFF37B8C8u
-#define C_INK    0xFF111111u
 #define ROW_R    904.0f        /* the rows' right edge on the canvas */
 
 static void upper(char *dst, size_t cap, const char *s)
