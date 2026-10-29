@@ -14,7 +14,7 @@ That needs two things: a way to leave out the original HUD, and the values it sh
 |---|---|---|
 | 0x106AD0 | 0x1D5D60 | the health bar |
 | 0x10E680 | 0x1D6138 | the can icon and the can count |
-| 0x10DEA0 | 0x1D60F0 | the boost meter (bottom right) |
+| 0x10DEA0 | 0x1D60F0 | the speed meter (bottom right) |
 | 0x1080A0 | 0x1D5DE8 | the can icon, and the area name on the map screen (a shared sprite class) |
 | 0x105A90 | 0x1D5D20 | nothing visible while skating: probably trick, score or tag text that only shows in some states |
 | 0x10A590 | 0x1D5E28 | as above |
@@ -39,13 +39,13 @@ The walker sees every HUD node, so the ReJet HUD can read what the original woul
 | cans (0x10E680) | + 0xB8 | 0 with no cans | cans held (to confirm by collecting some) |
 | cans | + 0xD8 | 30 | the can cap |
 | cans | + 0xD0, + 0xD4 | 0 | digit glyphs of the count |
-| boost (0x10DEA0) | + 0x120, + 0x13C, + 0x138 | 0, then floats (586, 420, 580) | the meter's geometry; the fill amount is computed from tables (0x227330..), still to pin down |
+| speed (0x10DEA0) | + 0x1D0 / + 0x1D4 | 0 .. 2.31 | the **speed meter** (not a boost meter: it rises as you skate, full when boosting): current speed (clamped) over the maximum, as its update method 0x10DDA0 computes; that method also shifts the fill from blue to red with speed |
 
 To confirm: a short real play session with `REJET_HUDLOG=1` (collect cans, take a hit, boost) and read `hud:` lines in loader.log.
 
 ## The ReJet HUD (proof of concept)
 
-Menu: Game > **HUD: Classic / ReJet** (`rejet.ini` [Display] `Hud=0/1`, default Classic). With ReJet, hud.c skips the original health bar (0x106AD0) and cans (0x10E680), and `draw_rejet_hud` (menu.c) draws them at the screen's top right in the Garage HUD board's style: a gold bar in a black frame with a hard shadow, a red spray can and the count, in black-outlined lettering. It draws only while the game draws its own health node, so it is gone on the map and in cutscenes. The boost meter stays the game's until its fill amount is pinned down. `REJET_SHOTSOVERLAY=1` makes `REJET_SHOTS` screenshots include ReJet's overlay.
+Menu: Game > **HUD: Classic / ReJet** (`rejet.ini` [Display] `Hud=0/1`, default Classic). With ReJet, hud.c skips the original health bar (0x106AD0), cans (0x10E680) and speed meter (0x10DEA0), and `draw_rejet_hud` (menu.c) redraws them at the screen's edges, close to the game's shapes but cleaner: flat cel-shaded colour with a light top and shaded bottom, thin dark outlines and soft shadows (the user: modern, not comic-like). The can is red with no cans and yellow with some, as the game's. It draws only while the game draws its own health node, so it is gone on the map and in cutscenes. `REJET_SHOTSOVERLAY=1` makes `REJET_SHOTS` screenshots include ReJet's overlay.
 
 ## Still to find
 

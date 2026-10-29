@@ -10,6 +10,7 @@ extern const unsigned g_hud_patch_count;
 typedef struct HudValues {
     float health; /* 0..1: the original bar's fill over its background */
     int cans, cans_max;
+    float speed; /* 0..1: the speed meter (full when boosting) */
 } HudValues;
 
 /* The values, and 1 while the game is drawing its gameplay HUD (not on the map or in cutscenes). */

@@ -8,6 +8,7 @@
  * original HUD's nodes when it draws its own. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "hle.h"
@@ -51,7 +52,7 @@ static void log_values(DWORD draw, const unsigned char *node)
     static const struct { DWORD draw; const char *name; unsigned off[4]; } fields[] = {
         {0x106AD0, "health", {0x48, 0x60, 0xA8, 0xC0}},
         {0x10E680, "cans", {0xB8, 0xD8, 0xD0, 0xD4}},
-        {0x10DEA0, "boost", {0x120, 0x13C, 0x138, 0x1D8}},
+        {0x10DEA0, "speed", {0x1D0, 0x1D4, 0xA8, 0xC0}},
     };
     if (on < 0) {
         char env[4] = "";
@@ -85,6 +86,10 @@ static void __fastcall hud_draw_tree(unsigned char *node)
             note(draw, node);
             log_values(draw, node);
             int skip = g_hide == 1 && draw >= HUD_CODE_START && draw < HUD_CODE_END;
+            if (draw == 0x10DEA0) { /* speed: current (+0x1D0, clamped) over the maximum (+0x1D4), as its update (0x10DDA0) */
+                float top = *(const float *)(node + 0x1D4);
+                g_values.speed = top > 0 ? *(const float *)(node + 0x1D0) / top : 0;
+            }
             if (draw == 0x106AD0) { /* health: the fill quad (+0xA8..+0xC0) over the background (+0x48..+0x60) */
                 float bg = *(const float *)(node + 0x60) - *(const float *)(node + 0x48);
                 float fill = *(const float *)(node + 0xC0) - *(const float *)(node + 0xA8);
@@ -95,9 +100,8 @@ static void __fastcall hud_draw_tree(unsigned char *node)
                 g_values.cans = *(const int *)(node + 0xB8);
                 g_values.cans_max = *(const int *)(node + 0xD8);
             }
-            /* HUD: ReJet draws its own health and cans (menu.c); the boost meter stays the game's
-             * until its fill amount is pinned down */
-            if (g_settings.hud_style == 1 && (draw == 0x106AD0 || draw == 0x10E680))
+            /* HUD: ReJet draws its own health, cans and speed meter (menu.c) */
+            if (g_settings.hud_style == 1 && (draw == 0x106AD0 || draw == 0x10E680 || draw == 0x10DEA0))
                 skip = 1;
             if (g_hide == 2) { /* research: from frame 4200, hide HUD_METHODS[k] for 480 frames each, then none */
                 static int last = -1;
