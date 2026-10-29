@@ -87,6 +87,7 @@ static char g_capture_note[256];             /* bug report from the ReJet menu, 
 static CRITICAL_SECTION g_capture_note_lock;
 
 static void present(void);
+static void f12_screenshot(void);
 static void change_display(void);
 static void apply_window(void);
 static void widescreen_install(void);
@@ -784,6 +785,8 @@ static void XBAPI hle_D3DDevice_SetVerticalBlankCallback(void *cb)
 static void present(void)
 {
     RECT c, d;
+    if (menu_is_open())
+        f12_screenshot(); /* the menu presents here too, so F12 captures it */
     LONG cw, ch, w, h;
     static LONG last_cw, last_ch;
     GetClientRect(g_wnd, &c);
@@ -925,13 +928,11 @@ static void request_capture(const char *note)
 
 /* F12: Screenshots\jsrf_<date>_<time>.bmp next to the loader. REJET_SHOTS=<n> (debugging):
  * shot_NNNNN.bmp every n frames (1 = every 300). */
-static void maybe_screenshot(void)
+/* F12: the back buffer as it is now (the game's frame, or the ReJet menu while it is open). */
+static void f12_screenshot(void)
 {
-    static int every = -1;
     char name[MAX_PATH];
-    if (!g_dev)
-        return;
-    if (InterlockedExchange(&g_shot_request, 0)) {
+    if (g_dev && InterlockedExchange(&g_shot_request, 0)) {
         SYSTEMTIME t;
         GetLocalTime(&t);
         CreateDirectoryA("Screenshots", NULL);
@@ -941,6 +942,15 @@ static void maybe_screenshot(void)
         log_printf("d3d: screenshot %s\n", name);
         menu_toast("Screenshot saved");
     }
+}
+
+static void maybe_screenshot(void)
+{
+    static int every = -1;
+    char name[MAX_PATH];
+    if (!g_dev)
+        return;
+    f12_screenshot();
     if (every < 0) {
         char env[8] = "";
         every = GetEnvironmentVariableA("REJET_SHOTS", env, sizeof env) ? atoi(env) : 0;

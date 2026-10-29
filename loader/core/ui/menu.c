@@ -1449,16 +1449,21 @@ static void icon(int page, int target, float x, float y, DWORD bg)
         box(x + 42, y + 26, x + 46, y + 38, 0, C_INK);
         box(x + 52, y + 18, x + 56, y + 46, 0, C_INK);
         break;
-    case PAGE_GAME: /* language */
-        text(FONT_ITEM, x + 32, y + 8, 1, C_INK, "Aa");
-        break;
-    case PAGE_CONTROLS: /* a controller */
+    case PAGE_GAME: /* the game: a controller */
         box(x + 2, y + 18, x + 62, y + 48, 0, C_INK);
         box(x + 2 + t, y + 18 + t, x + 62 - t, y + 48 - t, 0, bg);
         box(x + 12, y + 31, x + 26, y + 35, 0, C_INK);
         box(x + 17, y + 26, x + 21, y + 40, 0, C_INK);
         box(x + 40, y + 26, x + 46, y + 32, 0, C_INK);
         box(x + 48, y + 34, x + 54, y + 40, 0, C_INK);
+        break;
+    case PAGE_CONTROLS: /* controller and keyboard layouts: a keyboard */
+        box(x + 2, y + 14, x + 62, y + 52, 0, C_INK);
+        box(x + 2 + t, y + 14 + t, x + 62 - t, y + 52 - t, 0, bg);
+        for (int r = 0; r < 2; r++)
+            for (int k = 0; k < 5; k++)
+                box(x + 11 + k * 9.5f, y + 23 + r * 9, x + 16 + k * 9.5f, y + 28 + r * 9, 0, C_INK);
+        box(x + 18, y + 41, x + 46, y + 45, 0, C_INK);
         break;
     default: /* quit: a door bracket and an arrow out */
         box(x + 8, y + 8, x + 13, y + 56, 0, C_INK);
@@ -1490,14 +1495,31 @@ static float DW(float w) { return w * (canvas_right() - canvas_left()) / 1280.0f
 #define DY(y) ((y) * (4.0f / 3.0f))
 
 /* An arrow pointing right (the design's chevrons), `w` long, centred on y. */
+/* A straight stroke of even thickness t from (x0, y0) to (x1, y1), with square ends. */
+static void stroke(float x0, float y0, float x1, float y1, float t, DWORD c)
+{
+    float dx = x1 - x0, dy = y1 - y0, l = sqrtf(dx * dx + dy * dy), nx, ny;
+    if (l <= 0)
+        return;
+    dx /= l;
+    dy /= l;
+    x0 -= dx * t / 2; /* square caps: the corners meet cleanly */
+    y0 -= dy * t / 2;
+    x1 += dx * t / 2;
+    y1 += dy * t / 2;
+    nx = -dy * t / 2;
+    ny = dx * t / 2;
+    tri(x0 + nx, y0 + ny, x1 + nx, y1 + ny, x1 - nx, y1 - ny, c);
+    tri(x0 + nx, y0 + ny, x1 - nx, y1 - ny, x0 - nx, y0 - ny, c);
+}
+
+/* An arrow pointing right (the design's chevron arrows), `w` long, centred on y. */
 static void arrow(float x, float y, float w, DWORD c)
 {
-    const float t = 7, hh = 22;
-    box(x, y - t / 2, x + w - 6, y + t / 2, 0, c);
-    tri(x + w - 26, y - hh, x + w, y, x + w - 26 + t, y - hh, c);
-    tri(x + w - 26 + t, y - hh, x + w, y, x + w - t, y, c);
-    tri(x + w - 26, y + hh, x + w, y, x + w - 26 + t, y + hh, c);
-    tri(x + w - 26 + t, y + hh, x + w, y, x + w - t, y, c);
+    const float t = 6.5f, hh = 20;
+    stroke(x, y, x + w - 3, y, t, c);
+    stroke(x + w - hh * 1.25f, y - hh, x + w, y, t, c);
+    stroke(x + w - hh * 1.25f, y + hh, x + w, y, t, c);
 }
 
 /* The pause page: a row of cyan tiles with icons (the design's Main board); the selected tile
@@ -1522,7 +1544,7 @@ static void draw_tiles(const Item *items, int n, int sel, float slide)
             y -= lift;
             box(x + 8, y + 8, x + w + 8, y + size + 8, 0, C_INK);
         }
-        outlined(x, y, x + w, y + size, 6, bg);
+        outlined(x, y, x + w, y + size, 4, bg);
         icon(g_page, it->target, x + w / 2 - 32, y + 18, bg);
         if (l)
             snprintf(label, sizeof label, "%s", l);
@@ -1569,7 +1591,7 @@ static void draw_menu(void)
             float tw = text_width(FONT_SMALL, PAGE_TITLE[g_page]) + 36, tx = x + lw + DW(18);
             float ty = ly + lh - 46 - 12 * (1 - ease_out(pg));
             box(tx, ty, tx + tw, ty + 46, -6, C_INK);
-            box(tx + 5, ty + 5, tx + tw - 5, ty + 41, -6, main_page ? C_WHITE : C_CYAN);
+            box(tx + 4, ty + 4, tx + tw - 4, ty + 42, -6, main_page ? C_WHITE : C_CYAN);
             text(FONT_SMALL, tx + tw / 2 - 3, ty + 9, 1, C_INK, PAGE_TITLE[g_page]);
         }
         g_fade = o;
@@ -1600,7 +1622,7 @@ static void draw_menu(void)
         if (on) { /* lifted: white with a black drop shadow */
             float lift = 6 * ease_out(progress(g_t_sel, 120));
             box(X0 + rx + 8, y + 8 - lift, X1 + rx + 8, y + rh + 8 - lift, 0, C_INK);
-            outlined(X0 + rx - lift, y - lift, X1 + rx - lift, y + rh - lift, 5, C_WHITE);
+            outlined(X0 + rx - lift, y - lift, X1 + rx - lift, y + rh - lift, 3.5f, C_WHITE);
             ty -= lift;
             right -= lift;
         }
@@ -1657,7 +1679,7 @@ static void draw_menu(void)
                 w -= text_width(font, (char[]){*v++, 0});
             if (tag) { /* the value in a tag: cyan when selected, with arrows */
                 float x1 = right - (on ? 34 : 0) + nudge, x0 = x1 - w - 28;
-                outlined(x0, ty + 2, x1, ty + 46, 4, on ? C_CYAN : 0x80FFFFFFu);
+                outlined(x0, ty + 6, x1, ty + 40, 3, on ? C_CYAN : 0x80FFFFFFu); /* even margins in the row */
                 text(font, x1 - 14, ty, 2, C_INK, v);
                 if (on) {
                     text(FONT_ITEM, x0 - 12, ty, 2, C_INK, "<");
@@ -1826,8 +1848,21 @@ static void run_menu(void)
             IDirect3DStateBlock9_Apply(saved);
             IDirect3DStateBlock9_Release(saved);
         }
+        { /* 60 frames a second, like the game: a plain Sleep(15) plus the wait for the display
+           * missed every other refresh (30 fps) */
+            static LARGE_INTEGER freq, next;
+            LARGE_INTEGER now;
+            if (!freq.QuadPart)
+                QueryPerformanceFrequency(&freq);
+            QueryPerformanceCounter(&now);
+            if (!next.QuadPart || now.QuadPart - next.QuadPart > freq.QuadPart / 10)
+                next = now; /* the first frame, or after a stall: start again */
+            next.QuadPart += freq.QuadPart / 60;
+            while (QueryPerformanceCounter(&now), now.QuadPart < next.QuadPart)
+                if (next.QuadPart - now.QuadPart > freq.QuadPart / 500) /* more than 2 ms left */
+                    Sleep(1);
+        }
         g_host.present();
-        Sleep(15);
     }
     g_text_focus = 0;
     if (g_frozen) {
