@@ -474,6 +474,11 @@ static int run(void *image_base, unsigned image_size)
         WideCharToMultiByte(CP_ACP, 0, folder, -1, xbe_path, MAX_PATH - 16, NULL, NULL);
         strcat_s(xbe_path, MAX_PATH, "\\default.xbe");
         run_seconds = 0;
+        { /* tests: REJET_RUNSECONDS=<n> stops the player route (setup, then the game) after n s */
+            char env[16] = "";
+            if (GetEnvironmentVariableA("REJET_RUNSECONDS", env, sizeof env))
+                run_seconds = (unsigned)atoi(env);
+        }
     }
     log_printf("xbe: %s\n", xbe_path);
 

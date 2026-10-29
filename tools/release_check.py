@@ -1,6 +1,7 @@
 """The release gate (docs/ALPHA2_PLAN.md, tests/README.md): run before any build goes to testers.
 
     python tools/release_check.py [--game <folder>] [--no-build] [--update-baseline]
+                                  [--setup | --no-setup] [--iso <disc image>]
 
 1. Builds the loader and runs the unit tests (rejet_tests.exe).
 2. Runs the game for about three minutes on a scripted route (logos, title, a new game, the
@@ -11,6 +12,11 @@
      (a new code path reached something ReJet ignores);
    - performance worse than this machine's baseline (tests/local/perf_baseline.json, made with
      --update-baseline): stutters, or the CPU time per frame (median, worst 1%).
+3. First-run setup, as a new player gets it (a release can play fine on this machine and still
+   ship a broken setup): a fresh folder with only ReJet.exe and rejet.dll, the disc image fed
+   to the setup screen (REJET_SETUP_IMAGE), and it must extract the game, save the folder in
+   the settings and boot it. It runs when the setup path changed since the last release tag
+   (SETUP_SOURCES), or with --setup; it extracts the whole disc (~2.5 GB, a few minutes).
 Exit code 0 when everything passes. The game is the player's own copy; nothing from it is
 written outside build\\ and tests\\local\\ (both git-ignored).
 """
@@ -116,6 +122,59 @@ def metrics(csv_path):
     }
 
 
+# What the first-run setup touches: a change to any of these since the last release runs step 3.
+SETUP_SOURCES = ("loader/core/ui/setup.c", "loader/core/ui/setup.h", "loader/core/iso.c", "loader/core/iso.h",
+                 "loader/core/settings.c", "loader/core/settings.h", "loader/core/loader.c")
+SETUP_SECONDS = 45  # after setup: long enough for the game's first frames
+
+
+def setup_changed():
+    """Whether SETUP_SOURCES changed since the last release tag (or there is no tag)."""
+    tag = subprocess.run(["git", "describe", "--tags", "--abbrev=0", "--match", "v*"], cwd=ROOT,
+                         capture_output=True, text=True).stdout.strip()
+    if not tag:
+        return True
+    diff = subprocess.run(["git", "diff", "--name-only", tag, "--", *SETUP_SOURCES], cwd=ROOT,
+                          capture_output=True, text=True).stdout
+    return bool(diff.strip())
+
+
+def find_iso(arg):
+    if arg:
+        return arg
+    found = sorted(glob.glob(os.path.join(ROOT, "*.iso")) + glob.glob(os.path.join(ROOT, "*.xiso")))
+    return found[0] if found else None
+
+
+def check_setup(iso):
+    """Step 3: a new player's first run, from a folder with only the program files."""
+    with tempfile.TemporaryDirectory(prefix="rejet-setup-") as tmp:
+        for f in ("ReJet.exe", "rejet.dll"):
+            with open(os.path.join(BUILD, f), "rb") as src, open(os.path.join(tmp, f), "wb") as dst:
+                dst.write(src.read())
+        ini = os.path.join(tmp, "rejet.ini")
+        with open(ini, "w") as f:
+            f.write(SETTINGS)  # no [Game] Folder: the setup screen must find the game
+        env = dict(os.environ, REJET_INI=ini, REJET_SETUP_IMAGE=iso, REJET_RUNSECONDS=str(SETUP_SECONDS),
+                   REJET_SKIPWARNING="1")
+        print(f"  ....  first-run setup from a fresh folder (extracts the disc; a window opens)")
+        r = subprocess.run([os.path.join(tmp, "ReJet.exe")], cwd=tmp, env=env, timeout=1800)
+        log = open(os.path.join(tmp, "loader.log"), errors="replace").read() if os.path.isfile(
+            os.path.join(tmp, "loader.log")) else ""
+        cfg = configparser.ConfigParser()
+        cfg.read(ini)
+        game = os.path.join(tmp, "Game")
+        ok = step("setup extracts the game", "setup: extracted" in log and
+                  os.path.isfile(os.path.join(game, "default.xbe")),
+                  next((l for l in log.splitlines() if l.startswith("setup: extracted")), "no extraction in the log"))
+        ok &= step("setup saves the game folder",
+                   os.path.normcase(cfg.get("Game", "Folder", fallback="")) == os.path.normcase(game))
+        frames = re.findall(r"d3d: frame (\d+)", log)
+        ok &= step("the game boots after setup", r.returncode == 0 and "timeout: stopping" in log and
+                   bool(frames), f"up to frame {frames[-1] if frames else 0}, exit code {r.returncode}")
+        return ok
+
+
 def unimplemented(log_text):
     names = set(re.findall(r"d3d: (\w+) not implemented yet", log_text))
     names |= set(re.findall(r"d3d: (SetRenderState_\w+)\([0-9A-F]+\) not applied", log_text))
@@ -127,6 +186,9 @@ def main():
     ap.add_argument("--game", help="folder with the game's default.xbe")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--update-baseline", action="store_true", help="save this run's performance as the baseline")
+    ap.add_argument("--setup", action="store_true", help="always test the first-run setup")
+    ap.add_argument("--no-setup", action="store_true", help="skip the first-run setup test")
+    ap.add_argument("--iso", help="the disc image for the setup test (default: the .iso in the repository root)")
     args = ap.parse_args()
     ok = True
 
@@ -187,6 +249,14 @@ def main():
                    f"{m['work_p99_ms']} vs baseline {b['work_p99_ms']} ms")
         ok &= step("stutters", m["stutters_per_min"] <= b["stutters_per_min"] * STUTTER_SLACK + 1,
                    f"{m['stutters_per_min']} vs baseline {b['stutters_per_min']} a minute")
+    if not args.no_setup and (args.setup or setup_changed()):
+        iso = find_iso(args.iso)
+        if iso:
+            ok &= check_setup(iso)
+        else:
+            ok &= step("first-run setup", False, "setup code changed but no disc image found: pass --iso")
+    else:
+        step("first-run setup", True, "skipped: setup code unchanged since the last release")
     print("RELEASE CHECK PASSED" if ok else "RELEASE CHECK FAILED")
     return 0 if ok else 1
 

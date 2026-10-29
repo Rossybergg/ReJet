@@ -25,6 +25,7 @@ python tools/release_check.py
    - not reaching 3D gameplay;
    - a D3D function or render state ReJet ignores that isn't listed in `baseline_unimplemented.txt` (a new code path reached it: look at it before adding it to the list);
    - performance worse than this machine's baseline: CPU time per frame (median and worst 1%), and stutters a minute.
+3. **First-run setup**, as a new player gets it: a fresh folder with only `ReJet.exe` and `rejet.dll`, the disc image (the `.iso` in the repository root, or `--iso`) fed to the setup screen. It fails unless setup extracts the game, saves the folder in the settings and the game then boots. A release can play fine on this machine and still ship a broken setup, so this runs whenever the setup path (`setup.c`, `iso.c`, `settings.c`, `loader.c`) changed since the last release tag, or with `--setup`; it extracts the whole disc (about 2.5 GB, a few minutes) into a temporary folder that is deleted afterwards.
 
 ## The performance baseline
 
