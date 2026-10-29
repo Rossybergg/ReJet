@@ -59,7 +59,7 @@ In order of value:
    - The biggest visual win: the cel-shaded outlines and the city's geometry edges shimmer badly at any resolution.
    - Render into multisampled render targets, then resolve before the game reads them back (render-to-texture, CopyRects, the boost effect, the screenshot path).
    - Must not break the 2D texcoord inset, or the depth-based effects.
-2. **Supersampling.** Render scale (×1.5, ×2) above the output resolution, downsampled with a good filter. Cleans texture shimmer that MSAA can't, for strong GPUs. It builds on the internal resolution we already have.
+2. **Supersampling. Deferred 10-29:** rendering above the display already works (Internal resolution up to 2160p) but Present shrinks it with the driver's bilinear filter, which keeps only part of the detail. Doing it properly means separating the game's render surface from the swap chain (the game's back buffer must keep its contents for the speed-trail blending), a box-filter downscale pass into a display-sized back buffer, and captures following the game surface. Worth it after MSAA mainly for texture and alpha-test shimmer. Originally: Render scale (×1.5, ×2) above the output resolution, downsampled with a good filter. Cleans texture shimmer that MSAA can't, for strong GPUs. It builds on the internal resolution we already have.
 3. **Frame pacing. Done 10-29:** locked to the display's refresh when it is a multiple of 60 Hz (60, 120, 240); other rates keep the 60 Hz clock.
    - Align the 60 game frames to the display refresh: on 120, 144 or 240 Hz displays, each game frame is shown for the same number of refreshes.
    - Use a flip-model swap chain, a waitable swap or DWM timing, with low latency and no tearing.
