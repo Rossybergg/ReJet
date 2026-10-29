@@ -2824,7 +2824,8 @@ static const BYTE *fix_ff_vertices(const BYTE *verts, UINT first, UINT last, UIN
     float su[4], sv[4];
     if (g_cur_vs & 1)
         return verts;
-    rhw = (g_cur_vs & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW && (g_tsx != 1.0f || g_tsy != 1.0f || g_squeeze != 1.0f);
+    rhw = (g_cur_vs & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW &&
+          (g_tsx != 1.0f || g_tsy != 1.0f || g_squeeze != 1.0f || (g_ms_type && !g_cur_rt));
     for (unsigned s = 0; s < 4; s++) {
         const XD3DPixelContainer *t = g_textures[s];
         const RenderTarget *r = t ? rt_find(t->Resource.Data) : NULL;
@@ -2859,10 +2860,14 @@ static const BYTE *fix_ff_vertices(const BYTE *verts, UINT first, UINT last, UIN
         BYTE *v = buf + (size_t)i * stride;
         memcpy(v, verts + (size_t)i * stride, stride);
         if (rhw) {
-            float half = (float)g_hw * 0.5f; /* squeezing only happens on the back buffer */
-            ((float *)v)[0] = g_squeeze != 1.0f ? (((float *)v)[0] * g_tsx - half) * g_squeeze + half
-                                                : ((float *)v)[0] * g_tsx;
-            ((float *)v)[1] *= g_tsy;
+            float at = (float)g_hw * g_pivot; /* squeezing only happens on the back buffer */
+            /* With anti-aliasing, edges on pixel boundaries (D3D9 puts pixel centres there) left the
+             * top and left edge pixels half covered: a seam along the cutscene bars at the screen's
+             * top and left. Half a pixel up and left covers them, as Direct3D 9 expects. */
+            float half_px = g_ms_type && !g_cur_rt ? 0.5f : 0.0f;
+            ((float *)v)[0] = (g_squeeze != 1.0f ? (((float *)v)[0] * g_tsx - at) * g_squeeze + at
+                                                 : ((float *)v)[0] * g_tsx) - half_px;
+            ((float *)v)[1] = ((float *)v)[1] * g_tsy - half_px;
         }
         for (int k = 0; k < nscale; k++) {
             float *uv = (float *)(v + off[k]);
