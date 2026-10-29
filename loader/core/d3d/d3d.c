@@ -75,6 +75,7 @@ static int g_in_scene;
 static ULONG g_draws, g_skipped, g_untextured; /* per-600-frame counters for the log */
 static ULONG g_frame_draws;                   /* this frame's draws (the start-up splash) */
 static volatile LONG g_shot_request;          /* F12 */
+static volatile LONG g_burst_request;         /* F9: a burst of screenshots, for studying animations */
 /* Manual-testing aids (docs/TESTING.md): F10 writes a numbered marker into the log; F11 captures
  * the next frame (screenshot, every draw with its state, the render-target textures) into
  * captures\capture_NNN_<time>\. REJET_CAPTURE_AT=<frame> does the same at a given frame. */
@@ -120,6 +121,10 @@ static LRESULT CALLBACK wnd_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
     }
     if ((m == WM_KEYDOWN || m == WM_SYSKEYDOWN) && wp == VK_F12) {
         InterlockedExchange(&g_shot_request, 1);
+        return 0;
+    }
+    if ((m == WM_KEYDOWN || m == WM_SYSKEYDOWN) && wp == VK_F9) {
+        InterlockedExchange(&g_burst_request, 1);
         return 0;
     }
     if ((m == WM_KEYDOWN || m == WM_SYSKEYDOWN) && wp == VK_F11) {
@@ -951,6 +956,26 @@ static void maybe_screenshot(void)
     if (!g_dev)
         return;
     f12_screenshot();
+    { /* F9: every 4th frame for 4 s (60 shots) into Screenshots\burst_<time> */
+        static ULONG burst_end, burst_start;
+        static char dir[MAX_PATH];
+        if (InterlockedExchange(&g_burst_request, 0) && g_frame >= burst_end) {
+            SYSTEMTIME t;
+            GetLocalTime(&t);
+            CreateDirectoryA("Screenshots", NULL);
+            snprintf(dir, sizeof dir, "Screenshots\\burst_%04u%02u%02u_%02u%02u%02u", t.wYear, t.wMonth, t.wDay, t.wHour,
+                     t.wMinute, t.wSecond);
+            CreateDirectoryA(dir, NULL);
+            burst_start = g_frame;
+            burst_end = g_frame + 240;
+            log_printf("d3d: screenshot burst into %s\n", dir);
+            menu_toast("Recording 4 s of screenshots");
+        }
+        if (g_frame < burst_end && (g_frame - burst_start) % 4 == 0) {
+            snprintf(name, sizeof name, "%s\\frame_%03lu.bmp", dir, (g_frame - burst_start) / 4);
+            save_backbuffer(name);
+        }
+    }
     if (every < 0) {
         char env[8] = "";
         every = GetEnvironmentVariableA("REJET_SHOTS", env, sizeof env) ? atoi(env) : 0;
