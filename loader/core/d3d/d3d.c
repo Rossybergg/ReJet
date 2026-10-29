@@ -110,6 +110,10 @@ static LRESULT CALLBACK wnd_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         log_printf("d3d: window closed; exiting\n");
         ExitProcess(0);
     }
+    if (m == WM_SETCURSOR && LOWORD(lp) == HTCLIENT && !menu_is_open()) { /* the game has no pointer */
+        SetCursor(NULL);
+        return TRUE;
+    }
     if ((m == WM_KEYDOWN || m == WM_SYSKEYDOWN) && wp == VK_F12) {
         InterlockedExchange(&g_shot_request, 1);
         return 0;
