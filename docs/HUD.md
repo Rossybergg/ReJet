@@ -27,8 +27,22 @@ That needs two things: a way to leave out the original HUD, and the values it sh
 - In gameplay the health bar, the can icon and count and the boost meter disappear; the 3D scene is untouched.
 - On the map screen everything stays except the **area name** ("Garage" and its dotted bar), drawn by 0x1080A0, the same class as the can icon. So the setting skips a list of methods (health, cans, boost) and must leave 0x1080A0 alone while the map is open (for example: skip it only in frames where the HUD's other nodes draw).
 
+## The values, read from the HUD's own nodes
+
+The walker sees every HUD node, so the ReJet HUD can read what the original would draw from the same nodes, with no hunting for addresses that move between sessions (the can count's address did). `REJET_HUDLOG=1` logs these fields when they change:
+
+| Node (draw method) | Field | Seen | Meaning |
+|---|---|---|---|
+| health (0x106AD0) | + 0x2B0 | 46 at the start of play | filled health segments |
+| health | + 0x2B4 | a handle | the player (`FUN_00012890(handle)` returns the player object; draws while player + 0x16AC < 0) |
+| cans (0x10E680) | + 0xB8 | 0 with no cans | cans held (to confirm by collecting some) |
+| cans | + 0xD8 | 30 | the can cap |
+| cans | + 0xD0, + 0xD4 | 0 | digit glyphs of the count |
+| boost (0x10DEA0) | + 0x120, + 0x13C, + 0x138 | 0, then floats (586, 420, 580) | the meter's geometry; the fill amount is computed from tables (0x227330..), still to pin down |
+
+To confirm: a short real play session with `REJET_HUDLOG=1` (collect cans, take a hit, boost) and read `hud:` lines in loader.log.
+
 ## Still to find
 
-- Which method draws which element (health, cans, boost, score and trick text, area name), by hiding them one at a time.
 - The values: health, cans, boost, score, tags left. Each HUD node probably reads them from the player object; the draw methods above are the place to look (their loads give the offsets), which should be more stable than raw addresses (the can count's address moved between sessions).
 - Split screen: the per-viewport walkers (0x11680 etc.) need the same treatment.

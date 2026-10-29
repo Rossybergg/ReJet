@@ -8,6 +8,7 @@
  * original HUD's nodes when it draws its own. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <string.h>
 
 #include "hle.h"
 #include "kernel.h"
@@ -38,6 +39,37 @@ static void note(DWORD draw, const unsigned char *node)
                *(const DWORD *)(node + 4), draw >= HUD_CODE_START && draw < HUD_CODE_END ? " HUD module" : "");
 }
 
+/* REJET_HUDLOG=1: log the HUD nodes' candidate value fields whenever they change, to confirm
+ * them from a real play session (docs/HUD.md): health segments, cans, boost geometry. */
+static void log_values(DWORD draw, const unsigned char *node)
+{
+    static int on = -1;
+    static DWORD last[3][4];
+    static const struct { DWORD draw; const char *name; unsigned off[4]; } fields[] = {
+        {0x106AD0, "health", {0x2B0, 0x2B4, 0x2A4, 0x2AC}},
+        {0x10E680, "cans", {0xB8, 0xD8, 0xD0, 0xD4}},
+        {0x10DEA0, "boost", {0x120, 0x13C, 0x138, 0x1D8}},
+    };
+    if (on < 0) {
+        char env[4] = "";
+        on = GetEnvironmentVariableA("REJET_HUDLOG", env, sizeof env) && env[0] == '1';
+    }
+    if (!on)
+        return;
+    for (int i = 0; i < 3; i++) {
+        DWORD v[4];
+        if (fields[i].draw != draw)
+            continue;
+        for (int k = 0; k < 4; k++)
+            v[k] = *(const DWORD *)(node + fields[i].off[k]);
+        if (memcmp(v, last[i], sizeof v)) {
+            memcpy(last[i], v, sizeof v);
+            log_printf("hud: %s node %p: +%X=%08lX +%X=%08lX +%X=%08lX +%X=%08lX\n", fields[i].name, (void *)node,
+                       fields[i].off[0], v[0], fields[i].off[1], v[1], fields[i].off[2], v[2], fields[i].off[3], v[3]);
+        }
+    }
+}
+
 static void __fastcall hud_draw_tree(unsigned char *node)
 {
     if (g_hide < 0) {
@@ -48,6 +80,7 @@ static void __fastcall hud_draw_tree(unsigned char *node)
         if (!(*(DWORD *)(node + 4) & 0x40000)) {
             DWORD draw = (*(DWORD **)node)[3];
             note(draw, node);
+            log_values(draw, node);
             int skip = g_hide == 1 && draw >= HUD_CODE_START && draw < HUD_CODE_END;
             if (g_hide == 2) { /* research: from frame 4200, hide HUD_METHODS[k] for 480 frames each, then none */
                 static int last = -1;
