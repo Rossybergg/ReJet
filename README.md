@@ -67,6 +67,7 @@ Press **F1**, or **Back and Start together** on a controller, at any time. The g
 - **Volume control**, mute while you're in another window, an FPS counter, VSync.
 - **Smooth frame pacing**: on 60, 120 and 240 Hz displays every frame lines up with the screen's refresh, so motion stays even.
 - **Always 60 Hz**: the European disc's 50 Hz mode is gone, so the game always runs at full speed.
+- **Skip the graffiti warning** at start-up with Start or A, like the logo movies.
 - **First-time setup** that finds and checks your game for you.
 - **Built-in bug reporting**: one menu option saves everything needed to look into a problem.
 

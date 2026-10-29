@@ -66,6 +66,8 @@ Set as environment variables before starting `ReJet.exe`:
 | `REJET_DUMPHLSL=1` | The HLSL ReJet generates for each vertex program and combiner to `hlsl\vs_NNN.hlsl` / `hlsl\ps_NNN.hlsl` (NNN as in captures' `vs` / `ps` numbers) |
 | `REJET_TEXFULL=1` | Texture change checks read every word instead of a sample (to rule out missed CPU writes); texture changes after the first upload are always logged (`tex: changed`) |
 | `REJET_PACING=60` | Frame pacing on a fixed 60 Hz clock instead of the display's refresh (for comparisons) |
+| `REJET_SKIPWARNING=1` | Skip the graffiti warning at start-up without pressing anything |
+| `REJET_MEMDUMP=1` | Each F10 marker writes the game's memory to `memdump\mark<N>.bin` (hundreds of MB, game data: stays local); `python tools/memdiff.py <marks> --steps +,-1` finds a value from how it changed between marks |
 | `REJET_PROFILE=1` | Samples the game thread while it works on a frame and logs where the time goes every 30 s (ReJet functions by name from `rejet.pdb`, other modules by name, game code by address) |
 | `REJET_AUDIODUMP=1` | The final audio mix to `mix.wav` |
 | `REJET_DUMPVS=1` | Vertex programs and declarations to `vsh\` |

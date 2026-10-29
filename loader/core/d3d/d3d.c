@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <Xinput.h>
 
 #include "hle.h"
 #include "kernel.h"
@@ -693,9 +694,58 @@ static void pacing_sync(void)
     }
 }
 
+/* The graffiti warning at start-up ("Graffiti is art. However...") can't be skipped in the
+ * original, unlike the logo movies around it. ReJet recognises its picture (texture content
+ * name, as for HD replacements) and, when Start or A is pressed while it shows, stops waiting
+ * for vblanks until it is gone: the game's own frame-counted timer runs out in a moment and the
+ * game carries on as normal. */
+#define WARNING_IMAGE 0xC2BC81234870958Aull
+static ULONG g_warning_frame;    /* the last frame that drew the warning (0 = not yet) */
+static int g_warning_state;      /* 0 waiting for it, 1 skipping it, 2 done with it */
+
+static void warning_check_draw(void)
+{
+    if (g_warning_state < 2 && g_textures[0] && tex_name(g_textures[0]) == WARNING_IMAGE)
+        g_warning_frame = g_frame ? g_frame : 1;
+}
+
+static int skip_pressed(void)
+{
+    for (DWORD i = 0; i < 4; i++) {
+        XINPUT_STATE st;
+        if (XInputGetState(i, &st) == ERROR_SUCCESS &&
+            (st.Gamepad.wButtons & (XINPUT_GAMEPAD_START | XINPUT_GAMEPAD_A)))
+            return 1;
+    }
+    return GetForegroundWindow() == g_wnd &&
+           ((GetAsyncKeyState(VK_RETURN) | GetAsyncKeyState(VK_SPACE) | GetAsyncKeyState('Z')) & 0x8000);
+}
+
+/* 1 = don't wait this frame (skipping the warning). */
+static int warning_skip(void)
+{
+    int showing = g_warning_frame && g_frame - g_warning_frame <= 2;
+    if (g_warning_state == 2)
+        return 0;
+    static int automatic = -1; /* REJET_SKIPWARNING=1: always, without a press (debugging) */
+    if (automatic < 0)
+        automatic = GetEnvironmentVariableA("REJET_SKIPWARNING", NULL, 0) > 0;
+    if (g_warning_state == 0 && showing && (automatic || skip_pressed())) {
+        g_warning_state = 1;
+        log_printf("d3d: skipping the graffiti warning\n");
+    }
+    if (g_warning_state == 1 && !showing) {
+        g_warning_state = 2;
+        g_swap_due = 0; /* a new cadence from here */
+    }
+    return g_warning_state == 1;
+}
+
 static void wait_swap(void)
 {
     ULONG now;
+    if (warning_skip())
+        return;
     pacing_sync();
     now = vblank_now();
     if (g_swap_due && now < g_swap_due) /* on time: wait for it */
@@ -2961,6 +3011,7 @@ static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, con
     LONGLONG t0 = perf_now();
     g_dl_prim = xprim;
     g_dl_count = count;
+    warning_check_draw();
     if (g_capture_log && g_frame == g_capture_frame)
         find_game_callers(_AddressOfReturnAddress());
     if (stride <= 64) { /* captures list the first vertices (in buffer order) */
