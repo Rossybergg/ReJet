@@ -12,6 +12,7 @@
 
 #include "hle.h"
 #include "kernel.h"
+#include "settings.h"
 #include "ui/hud.h"
 
 #define HUD_CODE_START 0x100000u /* the HUD module's draw methods */
@@ -24,6 +25,8 @@ ULONG d3d_frame(void); /* d3d.c */
 
 static int g_hide = -1; /* REJET_HUDHIDE=1: leave out the original HUD; =cycle: one method at a time */
 static const DWORD HUD_METHODS[] = {0x1080A0, 0x10DEA0, 0x106AD0, 0x105A90, 0x10E680, 0x10A590};
+static HudValues g_values;
+static ULONG g_values_frame = (ULONG)-10; /* when the health node last drew */
 static DWORD g_seen[256];
 static unsigned g_nseen;
 
@@ -46,7 +49,7 @@ static void log_values(DWORD draw, const unsigned char *node)
     static int on = -1;
     static DWORD last[3][4];
     static const struct { DWORD draw; const char *name; unsigned off[4]; } fields[] = {
-        {0x106AD0, "health", {0x2B0, 0x2B4, 0x2A4, 0x2AC}},
+        {0x106AD0, "health", {0x48, 0x60, 0xA8, 0xC0}},
         {0x10E680, "cans", {0xB8, 0xD8, 0xD0, 0xD4}},
         {0x10DEA0, "boost", {0x120, 0x13C, 0x138, 0x1D8}},
     };
@@ -82,6 +85,20 @@ static void __fastcall hud_draw_tree(unsigned char *node)
             note(draw, node);
             log_values(draw, node);
             int skip = g_hide == 1 && draw >= HUD_CODE_START && draw < HUD_CODE_END;
+            if (draw == 0x106AD0) { /* health: the fill quad (+0xA8..+0xC0) over the background (+0x48..+0x60) */
+                float bg = *(const float *)(node + 0x60) - *(const float *)(node + 0x48);
+                float fill = *(const float *)(node + 0xC0) - *(const float *)(node + 0xA8);
+                g_values.health = bg > 0 ? fill / bg : 0;
+                g_values_frame = d3d_frame();
+            }
+            else if (draw == 0x10E680) { /* cans held, and the cap */
+                g_values.cans = *(const int *)(node + 0xB8);
+                g_values.cans_max = *(const int *)(node + 0xD8);
+            }
+            /* HUD: ReJet draws its own health and cans (menu.c); the boost meter stays the game's
+             * until its fill amount is pinned down */
+            if (g_settings.hud_style == 1 && (draw == 0x106AD0 || draw == 0x10E680))
+                skip = 1;
             if (g_hide == 2) { /* research: from frame 4200, hide HUD_METHODS[k] for 480 frames each, then none */
                 static int last = -1;
                 ULONG f = d3d_frame();
@@ -100,6 +117,12 @@ static void __fastcall hud_draw_tree(unsigned char *node)
         if (*(unsigned char **)(node + 0x28))
             hud_draw_tree(*(unsigned char **)(node + 0x28));
     }
+}
+
+int hud_values(HudValues *out)
+{
+    *out = g_values;
+    return d3d_frame() - g_values_frame <= 2;
 }
 
 const HlePatch g_hud_patches[] = {

@@ -33,7 +33,8 @@ The walker sees every HUD node, so the ReJet HUD can read what the original woul
 
 | Node (draw method) | Field | Seen | Meaning |
 |---|---|---|---|
-| health (0x106AD0) | + 0x2B0 | 46 at the start of play | filled health segments |
+| health (0x106AD0) | + 0x48 / + 0x60, + 0xA8 / + 0xC0 | 395 / 585.5, 395 / 516.9 | the bar's background and yellow fill quads (x, in 640x480 space): **health = fill width / background width** (0.64 at the start of play, as on screen) |
+| health | + 0x2B0 | 46 | the bar's length in 4-unit segments (0x1CB0B0 = 4.0), not the health |
 | health | + 0x2B4 | a handle | the player (`FUN_00012890(handle)` returns the player object; draws while player + 0x16AC < 0) |
 | cans (0x10E680) | + 0xB8 | 0 with no cans | cans held (to confirm by collecting some) |
 | cans | + 0xD8 | 30 | the can cap |
@@ -41,6 +42,10 @@ The walker sees every HUD node, so the ReJet HUD can read what the original woul
 | boost (0x10DEA0) | + 0x120, + 0x13C, + 0x138 | 0, then floats (586, 420, 580) | the meter's geometry; the fill amount is computed from tables (0x227330..), still to pin down |
 
 To confirm: a short real play session with `REJET_HUDLOG=1` (collect cans, take a hit, boost) and read `hud:` lines in loader.log.
+
+## The ReJet HUD (proof of concept)
+
+Menu: Game > **HUD: Classic / ReJet** (`rejet.ini` [Display] `Hud=0/1`, default Classic). With ReJet, hud.c skips the original health bar (0x106AD0) and cans (0x10E680), and `draw_rejet_hud` (menu.c) draws them at the screen's top right in the Garage HUD board's style: a gold bar in a black frame with a hard shadow, a red spray can and the count, in black-outlined lettering. It draws only while the game draws its own health node, so it is gone on the map and in cutscenes. The boost meter stays the game's until its fill amount is pinned down. `REJET_SHOTSOVERLAY=1` makes `REJET_SHOTS` screenshots include ReJet's overlay.
 
 ## Still to find
 

@@ -55,6 +55,7 @@ void settings_load(void)
     GET("Display", "Anisotropy", anisotropy, 1, 16);
     GET("Display", "ShowFPS", show_fps, 0, 1);
     GET("Display", "Antialiasing", antialiasing, 1, 8);
+    GET("Display", "Hud", hud_style, 0, 1);
     GET("Display", "HudEdges", hud_edges, 0, 1);
     GET("Audio", "Volume", volume, 0, 100);
     GET("Audio", "MuteInBackground", mute_in_background, 0, 1);
@@ -84,6 +85,7 @@ void settings_save(void)
     PUT("Display", "Anisotropy", anisotropy);
     PUT("Display", "ShowFPS", show_fps);
     PUT("Display", "Antialiasing", antialiasing);
+    PUT("Display", "Hud", hud_style);
     PUT("Display", "HudEdges", hud_edges);
     PUT("Audio", "Volume", volume);
     PUT("Audio", "MuteInBackground", mute_in_background);

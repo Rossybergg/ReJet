@@ -22,6 +22,7 @@
 
 #include "kernel.h"
 #include "settings.h"
+#include "ui/hud.h"
 #include "ui/menu.h"
 #include "version.gen.h"
 
@@ -996,6 +997,7 @@ static const int ANISO[] = {1, 2, 4, 8, 16};
 static const char *const ANISO_NAMES[] = {"Original", "2x", "4x", "8x", "16x"};
 static const int AA[] = {1, 2, 4, 8};
 static const char *const AA_NAMES[] = {"Off (original)", "2x MSAA", "4x MSAA", "8x MSAA"};
+static const char *const HUD_NAMES[] = {"Classic", "ReJet"};
 static const char *const LANG_NAMES[] = {"Japanese", "English", "French", "German", "Spanish", "Italian"};
 static const char *const REPORT_KINDS[] = {"Graphics", "Audio", "Controls", "Gameplay", "Crash or freeze",
                                            "Slow or stutter", "Other"};
@@ -1131,6 +1133,8 @@ static Item g_audio[] = {
 };
 static void setup_again(void);
 static Item g_game[] = {
+    CHOICE("HUD", g_settings.hud_style, HUD_NAMES, 0, changed_save,
+           "Classic: the game's own HUD. ReJet: our updated HUD (health and cans so far)."),
     CHOICE("Language", g_settings.language, LANG_NAMES, 1, changed_save, "Text and voice language."),
     {IT_INFO, "Game files", NULL, NULL, 0, 0, -1, NULL, g_folder_text},
     ACTION("Choose other game files", -2, setup_again,
@@ -1892,6 +1896,53 @@ static void draw_splash(unsigned long frame_draws)
     g_fade = saved;
 }
 
+/* Text with a black outline and a drop shadow, as the game's own HUD lettering. */
+static void outlined_text(int font, float x, float y, int align, DWORD c, const char *s)
+{
+    static const float d[][2] = {{-3, 0}, {3, 0}, {0, -3}, {0, 3}, {-2, -2}, {2, 2}, {-2, 2}, {2, -2}};
+    text(font, x + 5, y + 5, align, C_INK, s);
+    for (int i = 0; i < 8; i++)
+        text(font, x + d[i][0], y + d[i][1], align, C_INK, s);
+    text(font, x, y, align, c, s);
+}
+
+/* The ReJet HUD (HUD: ReJet; the Garage HUD board, docs/HUD.md): the original's health bar and
+ * can count redrawn at the screen's top right, cel-shaded (flat colour, black outlines, hard
+ * shadows) like the game. Only while the game draws its gameplay HUD. */
+static void draw_rejet_hud(void)
+{
+    HudValues v;
+    float saved = g_fade;
+    if (g_settings.hud_style != 1 || !hud_values(&v))
+        return;
+    g_fade = 1;
+    { /* health: a gold bar in a black frame with a hard shadow */
+        float x1 = DX(1280 - 44), x0 = x1 - DW(420), y0 = DY(34), y1 = y0 + DY(26), f;
+        f = v.health;
+        box(x0 + 6, y0 + 6, x1 + 10, y1 + 10, 0, 0x80000000u);
+        box(x0 - 5, y0 - 5, x1 + 5, y1 + 5, 0, C_INK);
+        box(x0, y0, x1, y1, 0, 0xFF6B6F70u);
+        if (f > 0) {
+            float xf = x0 + (x1 - x0) * (f > 1 ? 1 : f);
+            box(x0, y0, xf, y1, 0, 0xFFF2B705u);
+            box(x0, y0, xf, y0 + (y1 - y0) * 0.35f, 0, 0xFFFFD34Du); /* the top highlight */
+            box(x0, y1 - (y1 - y0) * 0.2f, xf, y1, 0, 0xFFC98B00u);  /* the shaded bottom */
+        }
+    }
+    { /* cans: a red spray can and the count */
+        char s[16];
+        float cx = DX(1280 - 44) - DW(150), cy = DY(80);
+        box(cx + 5, cy + 18, cx + 39, cy + 74, 0, 0x80000000u);
+        outlined(cx, cy + 14, cx + 34, cy + 70, 4, 0xFFE32A2Au);
+        box(cx + 7, cy + 4, cx + 27, cy + 16, 0, C_INK);
+        box(cx + 10, cy + 7, cx + 24, cy + 14, 0, 0xFFBBBBBBu);
+        box(cx + 8, cy + 24, cx + 14, cy + 50, 0, 0x80FFFFFFu); /* the shine */
+        snprintf(s, sizeof s, "x %d", v.cans);
+        outlined_text(FONT_ITEM, cx + 50, cy + 18, 0, C_WHITE, s);
+    }
+    g_fade = saved;
+}
+
 void menu_frame(unsigned long frame_draws)
 {
     if (!DEV || !ready())
@@ -1906,6 +1957,7 @@ void menu_frame(unsigned long frame_draws)
             run_menu();
         }
     }
+    draw_rejet_hud();
     draw_fps();
     draw_toasts();
     flush();

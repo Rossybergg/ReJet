@@ -967,10 +967,22 @@ static DWORD XBAPI hle_D3DDevice_Swap(DWORD Flags)
         g_in_scene = 0;
     }
     msaa_resolve(); /* everything below reads the device's back buffer */
-    maybe_screenshot();
-    testing_hotkeys(); /* before Present: the back buffer still holds this frame */
+    {
+        static int overlay = -1; /* REJET_SHOTSOVERLAY=1: screenshots include ReJet's overlay (HUD, messages) */
+        if (overlay < 0) {
+            char env[4] = "";
+            overlay = GetEnvironmentVariableA("REJET_SHOTSOVERLAY", env, sizeof env) && env[0] == '1';
+        }
+        if (!overlay)
+            maybe_screenshot();
+        testing_hotkeys(); /* before Present: the back buffer still holds this frame */
+        if (g_dev) {
+            menu_frame(g_frame_draws); /* splash, messages, FPS; runs the menu (game paused) when opened */
+            if (overlay)
+                maybe_screenshot();
+        }
+    }
     if (g_dev) {
-        menu_frame(g_frame_draws); /* splash, messages, FPS; runs the menu (game paused) when opened */
         g_frame_draws = 0;
         present();
     }
