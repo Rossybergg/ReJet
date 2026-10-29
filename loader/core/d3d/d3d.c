@@ -1240,16 +1240,35 @@ static HRESULT XBAPI hle_D3DDevice_DeletePixelShader(DWORD Handle)
     return S_OK;
 }
 
+/* The active pixel shader's per-stage constants, kept as the Xbox does (see psh_set_constant):
+ * a stage mapped to a register the game never sets keeps the definition's value. Sprayed
+ * graffiti depends on this: its combiner reads register 2, which the game never sets, and
+ * zero there made every tag fully transparent. */
+static float g_ps_live[18][4];
+
 static HRESULT XBAPI hle_D3DDevice_SetPixelShader(DWORD Handle)
 {
     g_cur_ps = Handle;
+    if ((Handle & 1) && (Handle >> 1) < g_ps_count)
+        psh_constants(g_ps_def[Handle >> 1], NULL, g_ps_live);
     return S_OK;
 }
 
 static HRESULT XBAPI hle_D3DDevice_SetPixelShaderConstant(DWORD Register, const void *pData, DWORD Count)
 {
-    if (Register + Count <= 16)
+    if (Register + Count <= 16) {
         memcpy(g_psconst[Register], pData, Count * sizeof g_psconst[0]);
+        if ((g_cur_ps & 1) && (g_cur_ps >> 1) < g_ps_count)
+            for (DWORD k = 0; k < Count; k++)
+                psh_set_constant(g_ps_def[g_cur_ps >> 1], Register + k, g_psconst[Register + k], g_ps_live);
+    }
+    if (g_capture_log && g_frame == g_capture_frame) {
+        const float *f = (const float *)pData;
+        fprintf(g_capture_log, "SetPixelShaderConstant(%lu, %lu):", Register, Count);
+        for (DWORD k = 0; k < Count * 4 && k < 32; k++)
+            fprintf(g_capture_log, " %.3f", f[k]);
+        fprintf(g_capture_log, "\n");
+    }
     return S_OK;
 }
 
@@ -2133,8 +2152,39 @@ static void draw_log(void)
                 XTEXTURE_STATE[0][12], XTEXTURE_STATE[0][14], XTEXTURE_STATE[0][15], XTEXTURE_STATE[0][16],
                 XTEXTURE_STATE[0][18], XTEXTURE_STATE[0][19], g_vp_rect.left, g_vp_rect.top, g_vp_rect.right,
                 g_vp_rect.bottom, g_vp_partial ? " (clipped)" : "", g_rs[D3DRS_LIGHTING]);
-        if (g_dl_verts) /* full-screen quads and the like: their raw vertices */
-            for (DWORD v = 0; v < g_dl_count; v++) {
+        for (int s = 1; s < 4; s++) { /* the other stages: multi-texture draws (decals, effects) */
+            const XD3DPixelContainer *ts = g_textures[s];
+            if (!ts && XTEXTURE_STATE[s][12] <= 1) /* empty and disabled */
+                continue;
+            fprintf(g_capture_log, "      stage%d t %02X %ux%u%s @%08X colorop %lu args %lX %lX alphaop %lu texcoord %lX\n",
+                    s, ts ? XFMT_FORMAT(ts->Format) : 0,
+                    ts ? (ts->Size ? XSIZE_WIDTH(ts->Size) : 1u << XFMT_USIZE(ts->Format)) : 0,
+                    ts ? (ts->Size ? XSIZE_HEIGHT(ts->Size) : 1u << XFMT_VSIZE(ts->Format)) : 0,
+                    ts && rt_find(ts->Resource.Data) ? " (rt)" : "", ts ? ts->Resource.Data : 0,
+                    XTEXTURE_STATE[s][12], XTEXTURE_STATE[s][14], XTEXTURE_STATE[s][15], XTEXTURE_STATE[s][16],
+                    XTEXTURE_STATE[s][28]);
+        }
+        if (g_cur_vs & 1) { /* a vertex program: its declaration and constants c[96..135], once per program */
+            static unsigned char listed[MAX_SHADERS];
+            static ULONG listed_frame;
+            unsigned i = g_cur_vs >> 1;
+            if (listed_frame != g_frame) {
+                memset(listed, 0, sizeof listed);
+                listed_frame = g_frame;
+            }
+            if (i < MAX_SHADERS && !listed[i]) {
+                listed[i] = 1;
+                fprintf(g_capture_log, "      vs %u declaration:", i);
+                for (unsigned k = 0; k < g_vs_decl_n[i]; k++)
+                    fprintf(g_capture_log, " %08lX", g_vs_decl[i][k]);
+                fprintf(g_capture_log, "\n");
+                for (unsigned r = 96; r < 136; r++)
+                    fprintf(g_capture_log, "      c%u: %g %g %g %g\n", r, g_vconst[r][0], g_vconst[r][1],
+                            g_vconst[r][2], g_vconst[r][3]);
+            }
+        }
+        if (g_dl_verts) /* raw vertices: all of small draws, the first 8 of others */
+            for (DWORD v = 0; v < g_dl_count && v < 8; v++) {
                 const DWORD *d = (const DWORD *)(g_dl_verts + v * g_dl_stride);
                 fprintf(g_capture_log, "      v%lu:", v);
                 for (UINT k = 0; k < g_dl_stride / 4; k++)
@@ -2302,9 +2352,17 @@ static int prepare_draw(void)
                 }
                 ps = pv->state == 1 ? pv->host : NULL;
                 if (ps) {
-                    float pc[18][4];
-                    psh_constants(g_ps_def[i], (const float(*)[4])g_psconst, pc);
+                    float (*pc)[4] = g_ps_live;
                     IDirect3DDevice9Ex_SetPixelShaderConstantF(g_dev, 0, pc[0], 18);
+                    if (g_capture_log && g_frame == g_capture_frame) { /* captures: what each draw gets */
+                        const DWORD *def = g_ps_def[i];
+                        fprintf(g_capture_log, "      ps %u: count %08lX c0map %08lX c1map %08lX fcmap %08lX, constants:",
+                                i, def[53], def[57], def[58], def[59]);
+                        for (unsigned k = 0; k < 18; k++)
+                            fprintf(g_capture_log, " c%u(%.2f %.2f %.2f %.2f)", k, pc[k][0], pc[k][1], pc[k][2],
+                                    pc[k][3]);
+                        fprintf(g_capture_log, "\n");
+                    }
                 }
             }
         }
@@ -2608,7 +2666,7 @@ static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, con
     LONGLONG t0 = perf_now();
     g_dl_prim = xprim;
     g_dl_count = count;
-    if (!idx && count <= 8 && stride <= 64) {
+    if (stride <= 64) { /* captures list the first vertices (in buffer order) */
         g_dl_verts = verts;
         g_dl_stride = stride;
     }
@@ -2831,10 +2889,40 @@ STUB(GetTile, 0, D a, D b)
 STUB(SetTile, 0, D a, D b)
 STUB(DisplayQuery_18E120, 0, D a)
 STUB(GetTexture2, 0, D a, D b)
-STUB(SetRenderState_1arg, 0, D a)
 #undef D
 #undef STUB
 #pragma warning(pop)
+
+/* Render states ReJet doesn't apply yet, one function each so the log names them: the first
+ * calls of each, with the value and caller. */
+#define RS_STUB(name)                                                                              \
+    static void XBAPI stub_rs_##name(DWORD v)                                                      \
+    {                                                                                              \
+        static LONG n;                                                                             \
+        if (InterlockedIncrement(&n) <= 4)                                                         \
+            log_printf("d3d: SetRenderState_" #name "(%lX) not applied (from %08X)\n", v,          \
+                       (unsigned)(UINT_PTR)_ReturnAddress());                                       \
+    }
+RS_STUB(MultiSampleMode)
+RS_STUB(MultiSampleRenderTargetMode)
+RS_STUB(PSTextureModes)
+RS_STUB(EdgeAntiAlias)
+RS_STUB(ShadowFunc)
+RS_STUB(LineWidth)
+RS_STUB(Dxt1NoiseEnable)
+RS_STUB(LogicOp)
+RS_STUB(BackFillMode)
+RS_STUB(TwoSidedLighting)
+RS_STUB(VertexBlend)
+RS_STUB(YuvEnable)
+RS_STUB(OcclusionCullEnable)
+RS_STUB(StencilCullEnable)
+RS_STUB(RopZCmpAlwaysRead)
+RS_STUB(RopZRead)
+RS_STUB(DoNotCullUncompressed)
+RS_STUB(MultiSampleAntiAlias)
+RS_STUB(MultiSampleMask)
+#undef RS_STUB
 
 /* ------------------------------------------------------------------ patch table */
 
@@ -2916,26 +3004,26 @@ const HlePatch g_d3d_patches[] = {
     P(D3DDevice_SetRenderState_TextureFactor, hle_D3DDevice_SetRenderState_TextureFactor),
     P(D3DDevice_SetRenderState_FogColor, hle_D3DDevice_SetRenderState_FogColor),
     P(D3DDevice_SetRenderState_NormalizeNormals, hle_D3DDevice_SetRenderState_NormalizeNormals),
-    P(D3DDevice_SetRenderState_MultiSampleMode, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_MultiSampleRenderTargetMode, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_PSTextureModes, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_EdgeAntiAlias, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_ShadowFunc, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_LineWidth, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_Dxt1NoiseEnable, stub_SetRenderState_1arg),
+    P(D3DDevice_SetRenderState_MultiSampleMode, stub_rs_MultiSampleMode),
+    P(D3DDevice_SetRenderState_MultiSampleRenderTargetMode, stub_rs_MultiSampleRenderTargetMode),
+    P(D3DDevice_SetRenderState_PSTextureModes, stub_rs_PSTextureModes),
+    P(D3DDevice_SetRenderState_EdgeAntiAlias, stub_rs_EdgeAntiAlias),
+    P(D3DDevice_SetRenderState_ShadowFunc, stub_rs_ShadowFunc),
+    P(D3DDevice_SetRenderState_LineWidth, stub_rs_LineWidth),
+    P(D3DDevice_SetRenderState_Dxt1NoiseEnable, stub_rs_Dxt1NoiseEnable),
     P(D3DDevice_SetRenderState_ZBias, hle_D3DDevice_SetRenderState_ZBias),
-    P(D3DDevice_SetRenderState_LogicOp, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_BackFillMode, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_TwoSidedLighting, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_VertexBlend, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_YuvEnable, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_OcclusionCullEnable, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_StencilCullEnable, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_RopZCmpAlwaysRead, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_RopZRead, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_DoNotCullUncompressed, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_MultiSampleAntiAlias, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_MultiSampleMask, stub_SetRenderState_1arg),
+    P(D3DDevice_SetRenderState_LogicOp, stub_rs_LogicOp),
+    P(D3DDevice_SetRenderState_BackFillMode, stub_rs_BackFillMode),
+    P(D3DDevice_SetRenderState_TwoSidedLighting, stub_rs_TwoSidedLighting),
+    P(D3DDevice_SetRenderState_VertexBlend, stub_rs_VertexBlend),
+    P(D3DDevice_SetRenderState_YuvEnable, stub_rs_YuvEnable),
+    P(D3DDevice_SetRenderState_OcclusionCullEnable, stub_rs_OcclusionCullEnable),
+    P(D3DDevice_SetRenderState_StencilCullEnable, stub_rs_StencilCullEnable),
+    P(D3DDevice_SetRenderState_RopZCmpAlwaysRead, stub_rs_RopZCmpAlwaysRead),
+    P(D3DDevice_SetRenderState_RopZRead, stub_rs_RopZRead),
+    P(D3DDevice_SetRenderState_DoNotCullUncompressed, stub_rs_DoNotCullUncompressed),
+    P(D3DDevice_SetRenderState_MultiSampleAntiAlias, stub_rs_MultiSampleAntiAlias),
+    P(D3DDevice_SetRenderState_MultiSampleMask, stub_rs_MultiSampleMask),
     P(D3DDevice_SetTextureState_TexCoordIndex, hle_D3DDevice_SetTextureState_TexCoordIndex),
     P(D3DDevice_SetTextureState_BorderColor, hle_D3DDevice_SetTextureState_BorderColor),
     P(D3DDevice_SetTextureState_ColorKeyColor, hle_D3DDevice_SetTextureState_ColorKeyColor),

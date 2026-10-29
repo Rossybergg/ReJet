@@ -329,6 +329,7 @@ IDirect3DVertexShader9 *vsh_compile(IDirect3DDevice9 *dev, const DWORD *program,
         log_printf("vsh: program %u could not be translated\n", index);
         return NULL;
     }
+    shader_dump("vs", index, hlsl);
     if ((code = shader_compile(hlsl, "nv2a_vsh", "vs_2_a", err, sizeof err)) == NULL) {
         log_printf("vsh: program %u failed to compile: %s\n", index, err);
         return NULL;

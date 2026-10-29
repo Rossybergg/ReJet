@@ -280,8 +280,11 @@ static unsigned long long sample_hash(const unsigned char *p, unsigned bytes)
  * is still caught by the other. */
 static unsigned long long quick_hash(const unsigned char *p, unsigned bytes)
 {
-    unsigned a = 2166136261u, b = 0x9E3779B9u;
-    unsigned step = bytes > 65536 ? 61 : 1;
+    static int full = -1; /* REJET_TEXFULL=1: every word of every texture (testing missed changes) */
+    unsigned a = 2166136261u, b = 0x9E3779B9u, step;
+    if (full < 0)
+        full = GetEnvironmentVariableA("REJET_TEXFULL", NULL, 0) > 0;
+    step = bytes > 65536 && !full ? 61 : 1;
     for (unsigned i = 0; i + 4 <= bytes; i += 4 * step) {
         unsigned v = *(const unsigned *)(p + i);
         a = (a ^ v) * 16777619u;
@@ -572,6 +575,12 @@ IDirect3DBaseTexture9 *tex_get(IDirect3DDevice9 *dev, const XD3DPixelContainer *
         e->stage = NULL;
     }
     keep_stage = e->host != NULL;
+    if (keep_stage) { /* contents changed after the first upload: the game writes this texture */
+        static LONG logged;
+        if (InterlockedIncrement(&logged) <= 200)
+            log_printf("tex: changed %ux%u fmt %02X @%08X (header %p), frame %lu\n", w, h, xf, x->Resource.Data,
+                       (const void *)x, g_tex_frame);
+    }
     if (!e->host) {
         HRESULT hr;
         if (volume) {

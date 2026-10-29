@@ -97,3 +97,20 @@ void *shader_compile(const char *src, const char *name, const char *profile, cha
         ID3D10Blob_Release(errors);
     return out;
 }
+
+void shader_dump(const char *kind, unsigned index, const char *src)
+{
+    static int on = -1;
+    char path[64];
+    FILE *fp;
+    if (on < 0)
+        on = GetEnvironmentVariableA("REJET_DUMPHLSL", NULL, 0) > 0;
+    if (!on)
+        return;
+    CreateDirectoryA("hlsl", NULL);
+    snprintf(path, sizeof path, "hlsl\\%s_%03u.hlsl", kind, index);
+    if ((fp = fopen(path, "w")) != NULL) {
+        fputs(src, fp);
+        fclose(fp);
+    }
+}

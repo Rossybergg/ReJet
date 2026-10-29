@@ -278,6 +278,7 @@ IDirect3DPixelShader9 *psh_compile(IDirect3DDevice9 *dev, const DWORD *def, unsi
 
     if (!psh_to_hlsl(def, bound, hlsl, sizeof hlsl))
         return NULL;
+    shader_dump("ps", index, hlsl);
     if ((code = shader_compile(hlsl, "nv2a_psh", "ps_2_b", err, sizeof err)) == NULL) {
         log_printf("psh: shader %u failed to compile: %s\n--\n%s\n", index, err, hlsl);
         return NULL;
@@ -298,7 +299,7 @@ void psh_constants(const DWORD *def, const float user[16][4], float out[18][4])
             unsigned src_stage = (which == 0 ? unique_c0 : unique_c1) ? st : 0;
             unsigned map = ((which == 0 ? def[57] : def[58]) >> (4 * src_stage)) & 0xF;
             float *dst = out[which * 8 + st];
-            if (map != 0xF && map < 16) {
+            if (user && map != 0xF && map < 16) {
                 memcpy(dst, user[map], sizeof out[0]);
             }
             else {
@@ -313,7 +314,7 @@ void psh_constants(const DWORD *def, const float user[16][4], float out[18][4])
     for (unsigned k = 0; k < 2; k++) {
         unsigned map = (def[59] >> (4 * k)) & 0xF;
         float *dst = out[16 + k];
-        if (map != 0xF && map < 16) {
+        if (user && map != 0xF && map < 16) {
             memcpy(dst, user[map], sizeof out[0]);
         }
         else {
@@ -324,4 +325,18 @@ void psh_constants(const DWORD *def, const float user[16][4], float out[18][4])
             dst[3] = ((v >> 24) & 0xFF) / 255.0f;
         }
     }
+}
+
+void psh_set_constant(const DWORD *def, unsigned reg, const float value[4], float live[18][4])
+{
+    unsigned unique_c0 = (def[53] >> 8) & 0x10, unique_c1 = (def[53] >> 8) & 0x100;
+    for (unsigned st = 0; st < 8; st++) {
+        if (((def[57] >> (4 * (unique_c0 ? st : 0))) & 0xF) == reg)
+            memcpy(live[st], value, sizeof live[0]);
+        if (((def[58] >> (4 * (unique_c1 ? st : 0))) & 0xF) == reg)
+            memcpy(live[8 + st], value, sizeof live[0]);
+    }
+    for (unsigned k = 0; k < 2; k++)
+        if (((def[59] >> (4 * k)) & 0xF) == reg)
+            memcpy(live[16 + k], value, sizeof live[0]);
 }
