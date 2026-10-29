@@ -51,6 +51,9 @@ static unsigned char *g_xdevice; /* stand-in Xbox device object */
 static XD3DSurface g_backbuffer, g_depth;
 static ULONG g_frame;
 
+/* The frame number, for research switches elsewhere (hud.c). */
+ULONG d3d_frame(void) { return g_frame; }
+
 /* Render resolution: the game draws for g_xw x g_xh (640x480); the host back buffer is
  * g_hw x g_hh (settings). Clear rectangles are given in game pixels and scaled. */
 static UINT g_xw = 640, g_xh = 480, g_hw = 640, g_hh = 480;

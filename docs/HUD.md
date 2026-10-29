@@ -10,14 +10,14 @@ That needs two things: a way to leave out the original HUD, and the values it sh
 - It is reached from the object list in `FUN_000131c0` through `FUN_00012650` (single player: straight to 0x11220; split screen: 0x11680 / 0x11450 / 0x118B0 / 0x11AE0, one per viewport flag at object + 0x40..0x4C, still to look at).
 - The HUD's draw methods live in one block of game code, 0x100000-0x10F000. In single-player gameplay these node draw methods run (`REJET_HUDHIDE` logs them as `hud: node draw`):
 
-| Draw method | Vtable | Code block |
+| Draw method | Vtable | Draws (found by hiding one at a time, `REJET_HUDHIDE=cycle`) |
 |---|---|---|
-| 0x1080A0 | 0x1D5DE8 | HUD module |
-| 0x10DEA0 | 0x1D60F0 | HUD module |
-| 0x106AD0 | 0x1D5D60 | HUD module |
-| 0x105A90 | 0x1D5D20 | HUD module |
-| 0x10E680 | 0x1D6138 | HUD module |
-| 0x10A590 | 0x1D5E28 | HUD module |
+| 0x106AD0 | 0x1D5D60 | the health bar |
+| 0x10E680 | 0x1D6138 | the can icon and the can count |
+| 0x10DEA0 | 0x1D60F0 | the boost meter (bottom right) |
+| 0x1080A0 | 0x1D5DE8 | the can icon, and the area name on the map screen (a shared sprite class) |
+| 0x105A90 | 0x1D5D20 | nothing visible while skating: probably trick, score or tag text that only shows in some states |
+| 0x10A590 | 0x1D5E28 | as above |
 | 0x03CA80, 0x07E2D0, 0x0BB4A0, 0x046540, 0x0F8030, 0x0FE6E0, 0x0F8A40, 0x0F8810 | | other 2D (title, map, effects) |
 
 ## Leaving out the original HUD
@@ -25,7 +25,7 @@ That needs two things: a way to leave out the original HUD, and the values it sh
 `loader/core/ui/hud.c` replaces `FUN_00011220` with the same walk in C (an HLE patch), so ReJet can skip chosen nodes. With `REJET_HUDHIDE=1` (a test switch for now) it skips every draw method in the HUD module:
 
 - In gameplay the health bar, the can icon and count and the boost meter disappear; the 3D scene is untouched.
-- On the map screen everything stays except the **area name** ("Garage" and its dotted bar): one of the six HUD-module methods draws that too. So the setting must skip a list of methods, not the whole block (next step: find which one draws the area name).
+- On the map screen everything stays except the **area name** ("Garage" and its dotted bar), drawn by 0x1080A0, the same class as the can icon. So the setting skips a list of methods (health, cans, boost) and must leave 0x1080A0 alone while the map is open (for example: skip it only in frames where the HUD's other nodes draw).
 
 ## Still to find
 

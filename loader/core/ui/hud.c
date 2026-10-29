@@ -19,7 +19,10 @@
 typedef void(__fastcall *NodeDraw)(void *self, void *edx_unused, int arg); /* thiscall, 1 argument */
 typedef void (*MatrixFn)(void);
 
-static int g_hide = -1; /* REJET_HUDHIDE=1: leave out the original HUD (test switch for now) */
+ULONG d3d_frame(void); /* d3d.c */
+
+static int g_hide = -1; /* REJET_HUDHIDE=1: leave out the original HUD; =cycle: one method at a time */
+static const DWORD HUD_METHODS[] = {0x1080A0, 0x10DEA0, 0x106AD0, 0x105A90, 0x10E680, 0x10A590};
 static DWORD g_seen[256];
 static unsigned g_nseen;
 
@@ -38,14 +41,24 @@ static void note(DWORD draw, const unsigned char *node)
 static void __fastcall hud_draw_tree(unsigned char *node)
 {
     if (g_hide < 0) {
-        char env[4] = "";
-        g_hide = GetEnvironmentVariableA("REJET_HUDHIDE", env, sizeof env) && env[0] == '1';
+        char env[16] = "";
+        g_hide = !GetEnvironmentVariableA("REJET_HUDHIDE", env, sizeof env) ? 0 : env[0] == 'c' ? 2 : env[0] == '1';
     }
     for (; node; node = *(unsigned char **)(node + 0x30)) {
         if (!(*(DWORD *)(node + 4) & 0x40000)) {
             DWORD draw = (*(DWORD **)node)[3];
             note(draw, node);
-            if (!(g_hide && draw >= HUD_CODE_START && draw < HUD_CODE_END)) {
+            int skip = g_hide == 1 && draw >= HUD_CODE_START && draw < HUD_CODE_END;
+            if (g_hide == 2) { /* research: from frame 4200, hide HUD_METHODS[k] for 480 frames each, then none */
+                static int last = -1;
+                ULONG f = d3d_frame();
+                int k = f < 4200 ? 6 : (int)((f - 4200) / 480) % 7;
+                if (k != last)
+                    log_printf("hud: cycle now hides %s %08lX\n", k < 6 ? "method" : "nothing", k < 6 ? HUD_METHODS[k] : 0);
+                last = k;
+                skip = k < 6 && draw == HUD_METHODS[k];
+            }
+            if (!skip) {
                 ((MatrixFn)(UINT_PTR)0x1BB480)();
                 ((NodeDraw)(UINT_PTR)draw)(node, NULL, 0);
                 ((MatrixFn)(UINT_PTR)0x1BB510)();
