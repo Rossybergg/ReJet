@@ -469,6 +469,19 @@ static void box(float x0, float y0, float x1, float y1, float skew, DWORD c)
             g_white_v);
 }
 
+/* A solid triangle on the canvas (the menu's icons). */
+static void tri(float ax, float ay, float bx, float by, float cx, float cy, DWORD c)
+{
+    Vertex *v = g_v + g_nv;
+    DWORD col = with_alpha(c, g_fade);
+    if (g_nv + 3 > MAX_VERTS)
+        return;
+    v[0] = (Vertex){X(ax) - 0.5f, Y(ay) - 0.5f, 0, 1, col, g_white_u, g_white_v};
+    v[1] = (Vertex){X(bx) - 0.5f, Y(by) - 0.5f, 0, 1, col, g_white_u, g_white_v};
+    v[2] = (Vertex){X(cx) - 0.5f, Y(cy) - 0.5f, 0, 1, col, g_white_u, g_white_v};
+    g_nv += 3;
+}
+
 static float text_width(int font, const char *s)
 {
     float w = 0;
@@ -1225,6 +1238,8 @@ static void handle(int ev, char ch)
     it = &items[*sel];
     if (item_disabled(it) && (ev == IN_LEFT || ev == IN_RIGHT || ev == IN_OK))
         return;
+    if (g_page == PAGE_MAIN && (ev == IN_LEFT || ev == IN_RIGHT)) /* the pause page's tiles run across */
+        ev = ev == IN_LEFT ? IN_UP : IN_DOWN;
     switch (ev) {
     case IN_UP:
     case IN_DOWN:
@@ -1314,7 +1329,7 @@ static float openness(void)
 }
 
 /* The frozen game frame as a quad (back-buffer pixels, the top edge shifted right by skew). */
-static void frozen_quad(float x0, float y0, float x1, float y1, float skew, DWORD c)
+static void frozen_quad(float x0, float y0, float x1, float y1, float skew, DWORD c, float u0, float u1)
 {
     Vertex v[6];
     IDirect3DSurface9 *bb = NULL, *old_rt = NULL;
@@ -1327,11 +1342,11 @@ static void frozen_quad(float x0, float y0, float x1, float y1, float skew, DWOR
     IDirect3DDevice9Ex_GetRenderTarget(DEV, 0, &old_rt);
     IDirect3DDevice9Ex_GetBackBuffer(DEV, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb);
     IDirect3DDevice9Ex_SetRenderTarget(DEV, 0, bb);
-    v[0] = (Vertex){x0 + skew, y0, 0, 1, c, 0, 0};
-    v[1] = (Vertex){x1 + skew, y0, 0, 1, c, 1, 0};
-    v[2] = (Vertex){x0, y1, 0, 1, c, 0, 1};
+    v[0] = (Vertex){x0 + skew, y0, 0, 1, c, u0, 0};
+    v[1] = (Vertex){x1 + skew, y0, 0, 1, c, u1, 0};
+    v[2] = (Vertex){x0, y1, 0, 1, c, u0, 1};
     v[3] = v[1];
-    v[4] = (Vertex){x1, y1, 0, 1, c, 1, 1};
+    v[4] = (Vertex){x1, y1, 0, 1, c, u1, 1};
     v[5] = v[2];
     IDirect3DDevice9Ex_SetTexture(DEV, 0, (IDirect3DBaseTexture9 *)g_frozen);
     IDirect3DDevice9Ex_SetFVF(DEV, FVF);
@@ -1364,7 +1379,7 @@ static void draw_frozen(float o)
 {
     BYTE k = (BYTE)(255 - (255 - 0x80) * o); /* darkens to half as the menu opens */
     frozen_quad(-0.5f, -0.5f, (float)g_bw - 0.5f, (float)g_bh - 0.5f, 0,
-                0xFF000000u | (DWORD)k << 16 | (DWORD)k << 8 | k);
+                0xFF000000u | (DWORD)k << 16 | (DWORD)k << 8 | k, 0, 1);
 }
 
 static float g_preview[4]; /* the preview's frame on the canvas (draw_menu), for draw_preview */
@@ -1373,9 +1388,12 @@ static float g_preview[4]; /* the preview's frame on the canvas (draw_menu), for
 static void draw_preview(void)
 {
     BYTE a = (BYTE)(255 * openness());
-    if (g_preview[2] > g_preview[0])
+    if (g_preview[2] > g_preview[0]) {
+        float fa = (float)g_bw / (float)g_bh, pa = (X(g_preview[2]) - X(g_preview[0])) / (Y(g_preview[3]) - Y(g_preview[1]));
+        float uw = pa < fa ? pa / fa : 1; /* the middle of the frame, cropped to the preview's shape */
         frozen_quad(X(g_preview[0]) - 0.5f, Y(g_preview[1]) - 0.5f, X(g_preview[2]) - 0.5f, Y(g_preview[3]) - 0.5f,
-                    10 * g_scale, (DWORD)a << 24 | 0x00FFFFFFu);
+                    12 * g_scale, (DWORD)a << 24 | 0x00FFFFFFu, 0.5f - uw / 2, 0.5f + uw / 2);
+    }
 }
 
 /* Garage (docs/MENU_DESIGN.md, after the game's own Garage menu): a yellow field with orange
@@ -1400,42 +1418,155 @@ static void outlined(float x0, float y0, float x1, float y1, float o, DWORD fill
     box(x0 + o, y0 + o, x1 - o, y1 - o, 0, fill);
 }
 
+/* The pause page's icons, in a 64-unit cell at (x, y), drawn in ink with 5-unit strokes. */
+static void icon(int page, int target, float x, float y, DWORD bg)
+{
+    const float t = 5;
+    switch (target) {
+    case -1: /* resume: play */
+        tri(x + 18, y + 8, x + 52, y + 32, x + 18, y + 56, C_INK);
+        break;
+    case PAGE_REPORT: /* a warning sign */
+        tri(x + 32, y + 4, x + 62, y + 58, x + 2, y + 58, C_INK);
+        tri(x + 32, y + 16, x + 52, y + 52, x + 12, y + 52, bg);
+        box(x + 29, y + 26, x + 35, y + 42, 0, C_INK);
+        box(x + 29, y + 45, x + 35, y + 50, 0, C_INK);
+        break;
+    case PAGE_DISPLAY: /* a monitor */
+        box(x + 4, y + 8, x + 60, y + 46, 0, C_INK);
+        box(x + 4 + t, y + 8 + t, x + 60 - t, y + 46 - t, 0, bg);
+        box(x + 29, y + 46, x + 35, y + 54, 0, C_INK);
+        box(x + 18, y + 54, x + 46, y + 58, 0, C_INK);
+        break;
+    case PAGE_AUDIO: /* a speaker with sound */
+        box(x + 6, y + 22, x + 18, y + 42, 0, C_INK);
+        tri(x + 16, y + 22, x + 34, y + 8, x + 34, y + 56, C_INK);
+        tri(x + 16, y + 22, x + 34, y + 56, x + 16, y + 42, C_INK);
+        box(x + 42, y + 26, x + 46, y + 38, 0, C_INK);
+        box(x + 52, y + 18, x + 56, y + 46, 0, C_INK);
+        break;
+    case PAGE_GAME: /* language */
+        text(FONT_ITEM, x + 32, y + 8, 1, C_INK, "Aa");
+        break;
+    case PAGE_CONTROLS: /* a controller */
+        box(x + 2, y + 18, x + 62, y + 48, 0, C_INK);
+        box(x + 2 + t, y + 18 + t, x + 62 - t, y + 48 - t, 0, bg);
+        box(x + 12, y + 31, x + 26, y + 35, 0, C_INK);
+        box(x + 17, y + 26, x + 21, y + 40, 0, C_INK);
+        box(x + 40, y + 26, x + 46, y + 32, 0, C_INK);
+        box(x + 48, y + 34, x + 54, y + 40, 0, C_INK);
+        break;
+    default: /* quit: a door bracket and an arrow out */
+        box(x + 8, y + 8, x + 13, y + 56, 0, C_INK);
+        box(x + 8, y + 8, x + 30, y + 13, 0, C_INK);
+        box(x + 8, y + 51, x + 30, y + 56, 0, C_INK);
+        box(x + 22, y + 30, x + 48, y + 34, 0, C_INK);
+        tri(x + 44, y + 22, x + 60, y + 32, x + 44, y + 42, C_INK);
+        break;
+    }
+    (void)page;
+}
+
+/* Short names for the tiles (the help strip says the rest). */
+static const char *tile_label(const Item *it)
+{
+    switch (it->target) {
+    case -1: return "RESUME";
+    case PAGE_REPORT: return "REPORT";
+    case PAGE_QUIT: return "QUIT";
+    default: return NULL;
+    }
+}
+
+/* The signed-off Garage designs are drawn on a 1280x720 board spanning the whole 16:9 screen;
+ * DX/DY/DW place their coordinates on the canvas (960 units tall, widened by canvas_left/right),
+ * so the menu matches them at any aspect ratio. */
+static float DX(float x) { return canvas_left() + x * (canvas_right() - canvas_left()) / 1280.0f; }
+static float DW(float w) { return w * (canvas_right() - canvas_left()) / 1280.0f; }
+#define DY(y) ((y) * (4.0f / 3.0f))
+
+/* An arrow pointing right (the design's chevrons), `w` long, centred on y. */
+static void arrow(float x, float y, float w, DWORD c)
+{
+    const float t = 7, hh = 22;
+    box(x, y - t / 2, x + w - 6, y + t / 2, 0, c);
+    tri(x + w - 26, y - hh, x + w, y, x + w - 26 + t, y - hh, c);
+    tri(x + w - 26 + t, y - hh, x + w, y, x + w - t, y, c);
+    tri(x + w - 26, y + hh, x + w, y, x + w - 26 + t, y + hh, c);
+    tri(x + w - 26 + t, y + hh, x + w, y, x + w - t, y, c);
+}
+
+/* The pause page: a row of cyan tiles with icons (the design's Main board); the selected tile
+ * lifts onto white with a black drop shadow. */
+static void draw_tiles(const Item *items, int n, int sel, float slide)
+{
+    const float size = DY(104), gap = DW(14), y0 = DY(248);
+    for (int i = 0; i < n; i++) {
+        const Item *it = &items[i];
+        float rp = progress(g_t_page + 18.0 * i, 160);
+        float x = DX(72) + (DW(104) + gap) * i - 120 * slide + 20 * (1 - ease_out(rp)), y = y0;
+        float w = DW(104);
+        int on = i == sel;
+        DWORD bg = on ? C_WHITE : C_CYAN;
+        char label[32];
+        const char *l = tile_label(it);
+        float saved = g_fade;
+        g_fade = saved * ease_out(rp);
+        if (on) {
+            float lift = 10 * ease_out(progress(g_t_sel, 120));
+            x -= lift * 0.3f;
+            y -= lift;
+            box(x + 8, y + 8, x + w + 8, y + size + 8, 0, C_INK);
+        }
+        outlined(x, y, x + w, y + size, 6, bg);
+        icon(g_page, it->target, x + w / 2 - 32, y + 18, bg);
+        if (l)
+            snprintf(label, sizeof label, "%s", l);
+        else
+            upper(label, sizeof label, it->label);
+        text(FONT_SMALL, x + w / 2, y + size - 46, 1, C_INK, label);
+        g_fade = saved;
+    }
+}
+
 static void draw_menu(void)
 {
     int n;
     Item *items = page_items(g_page, &n);
-    int sel = g_sel[g_page] < n ? g_sel[g_page] : 0;
-    float y0 = 210, row = n * 64.0f <= 600.0f ? 64.0f : 600.0f / (float)n, rh = row - 10;
+    int sel = g_sel[g_page] < n ? g_sel[g_page] : 0, main_page = g_page == PAGE_MAIN;
+    /* sub-pages: the Display board's rows, 42 + 8 px apart, shrinking to fit long pages */
+    float y0 = DY(168), row = n * DY(50) <= DY(424) ? DY(50) : DY(424) / (float)n, rh = row - DY(8);
+    float X0 = DX(64), X1 = DX(904);
     double t = now_ms();
     float o = openness(), slide = 1 - o;
-    float pg = progress(g_t_page, 140), saved_fade = g_fade;
+    float pg = progress(g_t_page, 140), saved_fade = g_fade, list_end;
     int restart_note = 0;
 
-    /* the field and the orange bars drop in */
+    /* the field and the orange bars drop in (taller on the pause page, as the boards) */
     g_fade = o;
     box(canvas_left() - 10, -10, canvas_right() + 10, 970, 0, C_FIELD);
     {
-        static const float bars[][2] = {{0, 30}, {48, 52}, {118, 22}, {158, 70}, {246, 26}};
-        float dy = -100 * slide;
+        static const float bars[][2] = {{0, 26}, {44, 44}, {106, 18}, {142, 60}, {220, 22}};
+        float h = DY(main_page ? 96 : 64), dy = -h * slide;
         for (int i = 0; i < 5; i++)
-            box(60 + bars[i][0], -10 + dy, 60 + bars[i][0] + bars[i][1], 84 + dy, 0, C_ORANGE);
-        box(canvas_right() - 300, -10 + dy, canvas_right() - 276, 84 + dy, 0, C_ORANGE);
-        box(canvas_right() - 256, -10 + dy, canvas_right() - 214, 84 + dy, 0, C_ORANGE);
+            box(DX(60 + bars[i][0]), -10 + dy, DX(60 + bars[i][0] + bars[i][1]), h + dy, 0, C_ORANGE);
     }
 
-    /* the logo (black, as drawn) and the page's cyan tag */
+    /* the logo (black, as drawn) and the page tag: white on the pause page, cyan elsewhere */
     {
-        float x = 64 - 60 * slide, lw = g_logo_px ? logo(x, 104, 72, C_WHITE) : 0;
+        float lh = main_page ? DY(66) : DY(46), ly = main_page ? DY(124) : DY(84);
+        float x = (main_page ? DX(72) : DX(64)) - 60 * slide, lw = g_logo_px ? logo(x, ly, lh, C_WHITE) : 0;
         if (!lw) {
-            text(FONT_TITLE, x, 104, 0, C_INK, "REJET");
+            text(FONT_TITLE, x, ly, 0, C_INK, "REJET");
             lw = text_width(FONT_TITLE, "REJET");
         }
         g_fade = o * ease_out(pg);
         {
-            float tx = x + lw + 24, tw = text_width(FONT_SMALL, PAGE_TITLE[g_page]) + 32, ty = 132 - 12 * (1 - ease_out(pg));
-            box(tx, ty, tx + tw, ty + 42, -6, C_INK);
-            box(tx + 4, ty + 4, tx + tw - 4, ty + 38, -6, C_CYAN);
-            text(FONT_SMALL, tx + tw / 2 - 3, ty + 7, 1, C_INK, PAGE_TITLE[g_page]);
+            float tw = text_width(FONT_SMALL, PAGE_TITLE[g_page]) + 36, tx = x + lw + DW(18);
+            float ty = ly + lh - 46 - 12 * (1 - ease_out(pg));
+            box(tx, ty, tx + tw, ty + 46, -6, C_INK);
+            box(tx + 5, ty + 5, tx + tw - 5, ty + 41, -6, main_page ? C_WHITE : C_CYAN);
+            text(FONT_SMALL, tx + tw / 2 - 3, ty + 9, 1, C_INK, PAGE_TITLE[g_page]);
         }
         g_fade = o;
     }
@@ -1447,28 +1578,34 @@ static void draw_menu(void)
         if (fabsf(target - g_sel_pos) < 0.002f)
             g_sel_pos = target;
     }
-    for (int i = 0; i < n; i++) {
+    if (main_page) {
+        draw_tiles(items, n, sel, slide);
+        list_end = DY(400);
+    }
+    else
+        list_end = y0 + row * n + DY(24);
+    for (int i = 0; i < n && !main_page; i++) {
         const Item *it = &items[i];
         float rp = progress(g_t_page + 18.0 * i, 160);
         float rx = 40 * (float)g_page_dir * (1 - ease_out(rp)) - 120 * slide, y = y0 + row * i;
-        float ty = y + (rh - 46) * 0.5f, right = ROW_R - 18 + rx;
+        float ty = y + (rh - 46) * 0.5f, right = X1 - 18 + rx;
         int on = i == sel;
         DWORD fg = item_disabled(it) ? 0xFF6B5A20u : C_INK; /* info rows (Controls) in ink: dimmed reads as disabled */
         char label[96], val[200] = "";
         g_fade = o * ease_out(rp);
         if (on) { /* lifted: white with a black drop shadow */
             float lift = 6 * ease_out(progress(g_t_sel, 120));
-            box(64 + rx + 8, y + 8 - lift, ROW_R + rx + 8, y + rh + 8 - lift, 0, C_INK);
-            outlined(64 + rx - lift, y - lift, ROW_R + rx - lift, y + rh - lift, 4, C_WHITE);
+            box(X0 + rx + 8, y + 8 - lift, X1 + rx + 8, y + rh + 8 - lift, 0, C_INK);
+            outlined(X0 + rx - lift, y - lift, X1 + rx - lift, y + rh - lift, 5, C_WHITE);
             ty -= lift;
             right -= lift;
         }
         else {
-            box(64 + rx, y, ROW_R + rx, y + rh, 0, 0x14000000u);
-            box(64 + rx, y, 70 + rx, y + rh, 0, C_INK);
+            box(X0 + rx, y, X1 + rx, y + rh, 0, 0x14000000u);
+            box(X0 + rx, y, X0 + 8 + rx, y + rh, 0, C_INK);
         }
         upper(label, sizeof label, it->label);
-        text(FONT_ITEM, 86 + rx - (on ? 6 : 0), ty, 0, fg, label);
+        text(FONT_ITEM, X0 + 26 + rx - (on ? 6 : 0), ty, 0, fg, label);
         switch (it->type) {
         case IT_CHOICE:
         case IT_TOGGLE:
@@ -1529,11 +1666,13 @@ static void draw_menu(void)
     }
     g_fade = o;
 
-    /* the paused game, small and tilted, on the right (drawn by draw_preview over its frame) */
-    {
-        float x1 = canvas_right() - 64 + 200 * slide, x0 = x1 - 300, py0 = 210, py1 = 210 + 300 * 9.0f / 16.0f * 1.2f;
-        box(x0 + 3, py0 + 9, x1 + 13, py1 + 13, 10, 0x55000000u); /* shadow */
-        box(x0 - 5, py0 - 5, x1 + 5, py1 + 5, 10, C_INK);
+    /* the paused game on sub-pages: the Display board's frame (256 x 300 at 960, 168), slightly
+     * tilted; draw_preview fills it, cropped to its shape. The pause page has none (Main board). */
+    g_preview[0] = g_preview[2] = 0;
+    if (!main_page) {
+        float x0 = DX(960) + 200 * slide, x1 = x0 + DW(256), py0 = DY(168), py1 = DY(168 + 300);
+        box(x0 + 4, py0 + 10, x1 + 16, py1 + 14, 12, 0x55000000u); /* shadow */
+        box(x0 - 7, py0 - 7, x1 + 7, py1 + 7, 12, C_INK);
         g_preview[0] = x0;
         g_preview[1] = py0;
         g_preview[2] = x1;
@@ -1543,29 +1682,38 @@ static void draw_menu(void)
     /* the help line on a black strip, the game's own motif at its left */
     {
         const Item *it = &items[sel];
-        float y = y0 + row * n + 14, h = 48;
+        float y = list_end, h = DY(main_page ? 52 : 44), right = main_page ? DX(72 + 760) : DX(64 + 1152);
+        float x = main_page ? DX(72) : DX(64);
         const char *line = it->help && it->type != IT_INFO ? it->help
                            : restart_note                 ? "* applies the next time ReJet starts"
                                                           : NULL;
-        if (y < g_preview[3] + 24) /* short pages: below the preview, not under it */
-            y = g_preview[3] + 24;
+        if (!main_page && y < g_preview[3] + 24) /* short pages: stop short of the preview */
+            right = DX(904);
         if (line) { /* no empty strip on pages without help (Controls) */
-            box(64, y, 78, y + h, 0, C_INK);
-            box(84, y, 94, y + h, 0, C_INK);
-            box(100, y, canvas_right() - 64, y + h, 0, C_INK);
+            box(x, y, x + 18, y + h, 0, C_INK);
+            box(x + 26, y, x + 39, y + h, 0, C_INK);
+            box(x + 39, y, right, y + h, 0, C_INK);
             g_fade = o * ease_out(progress(g_t_sel, 140));
-            text(FONT_SMALL, 120, y + 10, 0, line == it->help ? C_WHITE : 0xFFC9C9C9u, line);
+            text(FONT_SMALL, x + 64, y + (h - 34) / 2, 0, line == it->help ? C_WHITE : 0xFFC9C9C9u, line);
             g_fade = o;
         }
     }
 
+    /* the pause page's orange rule and arrows (Main board) */
+    if (main_page) {
+        float dx = -200 * slide;
+        box(DX(72) + dx, DY(482), DX(72 + 1136) + dx, DY(482 + 18), 0, C_ORANGE);
+        arrow(DX(72) + dx, DY(532), DW(80), 0xFFC96A07u);
+        arrow(DX(172) + dx, DY(532), DW(60), 0xFFC96A07u);
+    }
+
     /* the button bar, with the build for bug reports */
     {
-        float dy = 70 * slide;
-        box(canvas_left(), 892 + dy, canvas_right(), 960 + dy, 0, C_INK);
-        text(FONT_SMALL, canvas_right() - 28, 912 + dy, 2, 0xFFC9C9C9u, "ReJet " REJET_BUILD);
+        float dy = 80 * slide, top = 960 - DY(60);
+        box(canvas_left(), top + dy, canvas_right(), 960 + dy, 0, C_INK);
+        text(FONT_SMALL, canvas_right() - 28, top + 22 + dy, 2, 0xFFC9C9C9u, "ReJet " REJET_BUILD);
         if (g_text_focus)
-            text(FONT_SMALL, 640, 912 + dy, 1, C_WHITE, "Type your note   Enter / Down  next   Esc  back");
+            text(FONT_SMALL, 640, top + 22 + dy, 1, C_WHITE, "Type your note   Enter / Down  next   Esc  back");
         else if (pad_connected()) { /* button icons with a controller, keys without one */
             static const struct { int button; const char *label; } hints[] = {
                 {BTN_A, "Select"}, {BTN_B, "Back"}, {BTN_DPAD, "Change"}, {BTN_START, "Resume"}};
@@ -1574,13 +1722,13 @@ static void draw_menu(void)
                 total += button_width(hints[i].button, h) + 10 + text_width(FONT_SMALL, hints[i].label) + 36;
             x = 640 - (total - 36) / 2;
             for (int i = 0; i < 4; i++) {
-                x += button_icon(hints[i].button, x, 909 + dy, h) + 10;
-                text(FONT_SMALL, x, 912 + dy, 0, C_WHITE, hints[i].label);
+                x += button_icon(hints[i].button, x, top + 19 + dy, h) + 10;
+                text(FONT_SMALL, x, top + 22 + dy, 0, C_WHITE, hints[i].label);
                 x += text_width(FONT_SMALL, hints[i].label) + 36;
             }
         }
         else
-            text(FONT_SMALL, 640, 912 + dy, 1, C_WHITE,
+            text(FONT_SMALL, 640, top + 22 + dy, 1, C_WHITE,
                  "Enter  select     Esc  back     Left / Right  change     F1  resume");
     }
     g_fade = saved_fade;
