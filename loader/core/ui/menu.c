@@ -1115,15 +1115,17 @@ static Item g_game[] = {
     ACTION("Choose other game files", -2, setup_again,
            "Next time ReJet starts it asks for your disc image or game folder again."),
 };
-static Item g_controls[] = { /* controller icons, then the keyboard keys */
+static Item g_controls[] = { /* the game's own layout (its manual); controller icons, then the keys */
     PAD("ReJet menu", BTN_BACK, BTN_START, "F1"),
     INFO("Move", "Left stick  /  W A S D"),
     PAD("Jump", BTN_A, -1, "Space or Z"),
-    PAD("Boost, spray", BTN_B, -1, "X"),
-    PAD("X / Y", BTN_X, BTN_Y, "C, V"),
-    PAD("Triggers", BTN_LT, BTN_RT, "Q, E"),
-    PAD("Start / Back", BTN_START, BTN_BACK, "Enter, Backspace"),
-    PAD("D-pad", BTN_DPAD, -1, "Arrow keys"),
+    PAD("Boost dash (10 cans)", BTN_B, -1, "X"),
+    PAD("Tricks", BTN_X, BTN_Y, "C, V"),
+    PAD("Spray graffiti, talk", BTN_RT, -1, "E"),
+    PAD("Camera behind you", BTN_LT, -1, "Q"),
+    INFO("Look around (standing)", "Right stick  /  I J K L"),
+    INFO("Shuffle", "Left stick click  /  Shift"),
+    PAD("Map / menus", BTN_START, BTN_DPAD, "Enter, arrow keys"),
     INFO("Screenshot, capture, marker", "F12, F11, F10"),
 };
 static Item g_report[] = {
@@ -1447,7 +1449,7 @@ static void draw_menu(void)
         float rx = 40 * (float)g_page_dir * (1 - ease_out(rp)) - 120 * slide, y = y0 + row * i;
         float ty = y + (rh - 46) * 0.5f, right = ROW_R - 18 + rx;
         int on = i == sel;
-        DWORD fg = it->type == IT_INFO || item_disabled(it) ? 0xFF6B5A20u : C_INK;
+        DWORD fg = item_disabled(it) ? 0xFF6B5A20u : C_INK; /* info rows (Controls) in ink: dimmed reads as disabled */
         char label[96], val[200] = "";
         g_fade = o * ease_out(rp);
         if (on) { /* lifted: white with a black drop shadow */

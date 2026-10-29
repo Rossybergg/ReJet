@@ -68,14 +68,15 @@ static int key(int vk)
 }
 
 /* Keyboard layout for port 1: arrows = d-pad, Enter = Start, Backspace = Back,
- * Space/Z = A, X/Esc = B, C = X, V = Y, Q/E = left/right trigger, WASD = left stick. */
+ * Space/Z = A, X/Esc = B, C = X, V = Y, Q/E = left/right trigger, WASD = left stick,
+ * Shift = left stick click (the shuffle), IJKL = right stick (look around). */
 static void read_keyboard(XB_GAMEPAD *g)
 {
     memset(g, 0, sizeof *g);
     if (!keyboard_active())
         return;
     g->wButtons = (WORD)((key(VK_UP) ? 1 : 0) | (key(VK_DOWN) ? 2 : 0) | (key(VK_LEFT) ? 4 : 0) |
-                         (key(VK_RIGHT) ? 8 : 0) | (key(VK_RETURN) && !key(VK_MENU) ? 0x10 : 0) /* not Alt+Enter: full screen */ | (key(VK_BACK) ? 0x20 : 0));
+                         (key(VK_RIGHT) ? 8 : 0) | (key(VK_RETURN) && !key(VK_MENU) ? 0x10 : 0) /* not Alt+Enter: full screen */ | (key(VK_BACK) ? 0x20 : 0) | (key(VK_SHIFT) ? 0x40 : 0));
     g->bAnalogButtons[0] = (key(VK_SPACE) || key('Z')) ? 255 : 0;
     g->bAnalogButtons[1] = (key('X') || key(VK_ESCAPE)) ? 255 : 0;
     g->bAnalogButtons[2] = key('C') ? 255 : 0;
@@ -84,6 +85,8 @@ static void read_keyboard(XB_GAMEPAD *g)
     g->bAnalogButtons[7] = key('E') ? 255 : 0;
     g->sThumbLX = (SHORT)((key('D') ? 32767 : 0) - (key('A') ? 32767 : 0));
     g->sThumbLY = (SHORT)((key('W') ? 32767 : 0) - (key('S') ? 32767 : 0));
+    g->sThumbRX = (SHORT)((key('L') ? 32767 : 0) - (key('J') ? 32767 : 0));
+    g->sThumbRY = (SHORT)((key('I') ? 32767 : 0) - (key('K') ? 32767 : 0));
 }
 
 /* Test hook (REJET_AUTOPRESS=1): on port 1, tap Start then A for 0.2 s every 3 s, so

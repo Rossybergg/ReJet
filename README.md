@@ -45,10 +45,14 @@ Your saves and settings are kept between sessions.
 |---|---|---|
 | Move | Left stick | W A S D |
 | Jump | A | Space or Z |
-| Boost and spray | B | X |
-| X / Y | X / Y | C / V |
-| Triggers | LT / RT | Q / E |
-| Start / Back | Start / Back | Enter / Backspace |
+| Boost dash (needs 10 cans) | B | X |
+| Tricks | X / Y | C / V |
+| Spray graffiti, talk | RT | E |
+| Camera behind you | LT | Q |
+| Look around (standing still) | Right stick | I J K L |
+| Shuffle | Left stick click | Shift |
+| Map | Start | Enter |
+| Menus | D-pad | Arrow keys |
 | **ReJet menu** | **Back + Start** | **F1** |
 | Full screen on or off | | Alt + Enter |
 
