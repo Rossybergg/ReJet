@@ -47,7 +47,7 @@ add_library(rejet SHARED
   res/rejet.rc)
 target_include_directories(rejet PRIVATE core ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 target_compile_options(rejet PRIVATE /W4 /arch:IA32)
-target_link_libraries(rejet PRIVATE shell32 gdi32 comdlg32 windowscodecs d3d9 d3dcompiler xinput xaudio2 ole32 dbghelp psapi winmm)
+target_link_libraries(rejet PRIVATE shell32 gdi32 comdlg32 windowscodecs d3d9 d3dcompiler xinput xaudio2 ole32 dbghelp psapi winmm dwmapi)
 # Symbols for the profiler (REJET_PROFILE) and crash logs: rejet.pdb next to the dll, never
 # packaged. /PDBALTPATH keeps the build machine's path out of the dll.
 target_compile_options(rejet PRIVATE /Zi)

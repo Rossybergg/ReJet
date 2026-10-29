@@ -65,6 +65,7 @@ Set as environment variables before starting `ReJet.exe`:
 | `REJET_PERFLOG=1` | Every frame to `logs\perf_<time>.csv` (work and wait times, ReJet's hot paths, draws, F10 markers); `python tools/perf_report.py [csv]` summarises it (time on screen per frame, stutters and their causes) |
 | `REJET_DUMPHLSL=1` | The HLSL ReJet generates for each vertex program and combiner to `hlsl\vs_NNN.hlsl` / `hlsl\ps_NNN.hlsl` (NNN as in captures' `vs` / `ps` numbers) |
 | `REJET_TEXFULL=1` | Texture change checks read every word instead of a sample (to rule out missed CPU writes); texture changes after the first upload are always logged (`tex: changed`) |
+| `REJET_PACING=60` | Frame pacing on a fixed 60 Hz clock instead of the display's refresh (for comparisons) |
 | `REJET_PROFILE=1` | Samples the game thread while it works on a frame and logs where the time goes every 30 s (ReJet functions by name from `rejet.pdb`, other modules by name, game code by address) |
 | `REJET_AUDIODUMP=1` | The final audio mix to `mix.wav` |
 | `REJET_DUMPVS=1` | Vertex programs and declarations to `vsh\` |

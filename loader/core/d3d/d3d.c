@@ -18,6 +18,7 @@
 #define COBJMACROS
 #include <windows.h>
 #include <d3d9.h>
+#include <dwmapi.h>
 #include <intrin.h>
 #include <math.h>
 #include <stdio.h>
@@ -508,8 +509,11 @@ static HRESULT XBAPI hle_D3DDevice_Clear(DWORD Count, const D3DRECT *pRects, DWO
  * thread, which loops on BlockUntilVerticalBlank (0x13BC70) and decodes audio once per vblank.
  * Each waiter waits for the next boundary on its own; the game's vblank callback (if any) runs
  * once per elapsed vblank, under a lock, on whichever thread notices first. */
-static LARGE_INTEGER g_vblank_start, g_qpf;
-static ULONG g_vblank_hz = 60, g_vblank_count;
+static LARGE_INTEGER g_qpf;
+/* The grid: vblank n is at g_vb_start + n * g_vb_period (QPC ticks). 60 Hz from the start; the
+ * frame pacing below moves it onto the display's own refresh when it can. */
+static volatile double g_vb_start, g_vb_period;
+static ULONG g_vblank_count;
 static CRITICAL_SECTION g_vblank_lock;
 static void *g_vblank_callback;
 static INIT_ONCE g_vblank_once = INIT_ONCE_STATIC_INIT;
@@ -521,9 +525,13 @@ static BOOL CALLBACK vblank_init(PINIT_ONCE once, PVOID param, PVOID *ctx)
     (void)ctx;
     InitializeCriticalSection(&g_vblank_lock);
     InitializeCriticalSection(&g_capture_note_lock);
-    QueryPerformanceFrequency(&g_qpf);
-    QueryPerformanceCounter(&g_vblank_start);
-    g_vblank_hz = 60; /* always PAL60 (kernel/hal.c) */
+    {
+        LARGE_INTEGER now;
+        QueryPerformanceFrequency(&g_qpf);
+        QueryPerformanceCounter(&now);
+        g_vb_start = (double)now.QuadPart;
+        g_vb_period = (double)g_qpf.QuadPart / 60.0; /* always PAL60 (kernel/hal.c) */
+    }
     return TRUE;
 }
 
@@ -532,7 +540,7 @@ static ULONG vblank_now(void)
     LARGE_INTEGER now;
     InitOnceExecuteOnce(&g_vblank_once, vblank_init, NULL, NULL);
     QueryPerformanceCounter(&now);
-    return (ULONG)((now.QuadPart - g_vblank_start.QuadPart) * g_vblank_hz / g_qpf.QuadPart);
+    return (ULONG)(((double)now.QuadPart - g_vb_start) / g_vb_period);
 }
 
 static void run_vblank_callbacks(void)
@@ -556,7 +564,7 @@ static void run_vblank_callbacks(void)
  * Each waiting thread sleeps on its own high-resolution waitable timer until the boundary. */
 static __declspec(thread) HANDLE t_vblank_timer;
 
-/* Sleep until vertical blank number `target` (counted from the start, at g_vblank_hz). */
+/* Sleep until vertical blank number `target` on the grid (g_vb_start, g_vb_period). */
 static void wait_vblank_until(ULONG target)
 {
     LARGE_INTEGER now, due;
@@ -567,7 +575,7 @@ static void wait_vblank_until(ULONG target)
             t_vblank_timer = CreateWaitableTimerW(NULL, FALSE, NULL);
     }
     for (;;) {
-        LONGLONG boundary = g_vblank_start.QuadPart + ((LONGLONG)target * g_qpf.QuadPart + g_vblank_hz - 1) / g_vblank_hz;
+        LONGLONG boundary = (LONGLONG)ceil(g_vb_start + (double)target * g_vb_period);
         QueryPerformanceCounter(&now);
         if (now.QuadPart >= boundary) {
             InterlockedExchangeAdd64(&g_perf_ticks[PERF_LATE], now.QuadPart - boundary);
@@ -598,9 +606,84 @@ static void wait_vblank(void)
  * (loading): start a new cadence at the next vblank. */
 static ULONG g_swap_due; /* the vblank the next frame is due at; 0 = none yet */
 
+/* Frame pacing on the display. A fixed 60 Hz grid drifts against the monitor's own refresh
+ * (59.94 Hz is common), so every few seconds a 60 Hz display showed one frame twice and skipped
+ * the next, and a 240 Hz one showed a frame for 3 or 5 refreshes instead of 4. When the refresh
+ * is a whole multiple of 60 (within 0.5%), the grid runs at the display's rate (every k-th
+ * refresh) and in its phase: each frame is due half a refresh before a vblank, far from the
+ * compositor's deadline either way. The phase is nudged at most 0.2 ms a frame, and a new period
+ * keeps the vblank count continuous (the game and CRI ADX count vblanks). Other refresh rates
+ * (144, 165 Hz) can't divide evenly and keep the 60 Hz grid. REJET_PACING=60 forces it. */
+static int g_pacing = -1; /* -1 not decided yet, 0 the 60 Hz grid, 1 on the display */
+static double g_disp_period, g_disp_vblank;
+static double g_pacing_err_sum;
+static ULONG g_pacing_err_n;
+
+static void set_vblank_period(double period, double now)
+{
+    if (period > 0 && fabs(period - g_vb_period) > 0.5) {
+        double count = (now - g_vb_start) / g_vb_period; /* the same count at the new rate */
+        g_vb_period = period;
+        g_vb_start = now - count * period;
+    }
+}
+
+static void pacing_sync(void)
+{
+    static int forced = -1;
+    static ULONG calls;
+    LARGE_INTEGER now;
+    if (forced < 0) {
+        char env[8] = "";
+        forced = GetEnvironmentVariableA("REJET_PACING", env, sizeof env) && atoi(env) == 60;
+        if (forced)
+            log_printf("pacing: fixed 60 Hz (REJET_PACING=60)\n");
+    }
+    if (forced)
+        return;
+    QueryPerformanceCounter(&now);
+    if (calls++ % 30 == 0) { /* the display's timing, twice a second */
+        DWM_TIMING_INFO ti;
+        memset(&ti, 0, sizeof ti);
+        ti.cbSize = sizeof ti;
+        if (SUCCEEDED(DwmGetCompositionTimingInfo(NULL, &ti)) && ti.qpcRefreshPeriod) {
+            double hz = (double)g_qpf.QuadPart / (double)ti.qpcRefreshPeriod;
+            int k = (int)floor(hz / 60.0 + 0.5), lock = k >= 1 && k <= 8 && fabs(hz / k - 60.0) < 0.3;
+            if (lock != g_pacing)
+                log_printf(lock ? "pacing: on the display (%.3f Hz, every %d refresh%s)\n"
+                                : "pacing: 60 Hz grid (display %.3f Hz isn't a multiple of 60)\n",
+                           hz, k, k == 1 ? "" : "es");
+            g_pacing = lock;
+            g_disp_period = (double)ti.qpcRefreshPeriod;
+            g_disp_vblank = (double)ti.qpcVBlank;
+            set_vblank_period(lock ? k * g_disp_period : (double)g_qpf.QuadPart / 60.0, (double)now.QuadPart);
+        }
+    }
+    if (g_pacing == 1 && g_swap_due) { /* due half a refresh before a display vblank */
+        double due = g_vb_start + (double)g_swap_due * g_vb_period;
+        double err = fmod(due + 0.5 * g_disp_period - g_disp_vblank, g_disp_period);
+        double step = (double)g_qpf.QuadPart * 0.0002;
+        if (err < 0)
+            err += g_disp_period;
+        if (err > 0.5 * g_disp_period)
+            err -= g_disp_period;
+        g_pacing_err_sum += fabs(err);
+        g_pacing_err_n++;
+        g_vb_start -= err > step ? step : err < -step ? -step : err;
+        if (g_pacing_err_n == 3600) { /* about a minute */
+            log_printf("pacing: average phase error %.3f ms\n",
+                       g_pacing_err_sum / g_pacing_err_n * 1000.0 / (double)g_qpf.QuadPart);
+            g_pacing_err_sum = 0;
+            g_pacing_err_n = 0;
+        }
+    }
+}
+
 static void wait_swap(void)
 {
-    ULONG now = vblank_now();
+    ULONG now;
+    pacing_sync();
+    now = vblank_now();
     if (g_swap_due && now < g_swap_due) /* on time: wait for it */
         wait_vblank_until(g_swap_due);
     else if (g_swap_due && now == g_swap_due) /* late by less than a frame: show it now */
