@@ -29,6 +29,10 @@ def git(*args):
 def main():
     allow_dirty = "--allow-dirty" in sys.argv
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    # Every version shown (menu, hints, setup, splash, logs, the exe's version resource) is built
+    # from VERSION, so a release must bump it: a version already tagged would ship old numbers.
+    if git("tag", "--list", f"v{version}") and not allow_dirty:
+        sys.exit(f"v{version} is already released: bump VERSION (patch for fixes, minor for features) first.")
     if git("status", "--porcelain", "--untracked-files=no") and not allow_dirty:
         sys.exit("The working tree has uncommitted changes: commit first (or --allow-dirty to test packaging).")
 
