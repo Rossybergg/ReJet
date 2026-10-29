@@ -44,6 +44,7 @@ add_library(rejet SHARED
   core/input/xpp.c
   core/audio/dsound.c
   core/ui/menu.c
+  core/ui/hud.c
   core/ui/setup.c
   res/rejet.rc)
 target_include_directories(rejet PRIVATE core ${CMAKE_CURRENT_SOURCE_DIR}/../include)

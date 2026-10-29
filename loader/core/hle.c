@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "hle.h"
+#include "ui/hud.h"
 #include "kernel.h"
 #include "xboxkrnl_impl.h"
 #include "xdk_addrs.gen.h"
@@ -102,6 +103,7 @@ int hle_apply(const unsigned char *xbe_file, unsigned long xbe_size)
     n += patch_table(g_d3d_patches, g_d3d_patch_count);
     n += patch_table(g_input_patches, g_input_patch_count);
     n += patch_table(g_audio_patches, g_audio_patch_count);
+    n += patch_table(g_hud_patches, g_hud_patch_count);
     FlushInstructionCache(GetCurrentProcess(), NULL, 0);
     log_printf("hle: xbe hash ok, %u functions patched\n", n);
     return 1;
