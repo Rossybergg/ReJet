@@ -970,12 +970,14 @@ static const char *RES_NAMES[8], *WIN_NAMES[8];
 static const char *const ASPECT_NAMES[] = {"4:3 (original)", "16:10", "16:9", "21:9"};
 static const int ANISO[] = {1, 2, 4, 8, 16};
 static const char *const ANISO_NAMES[] = {"Original", "2x", "4x", "8x", "16x"};
+static const int AA[] = {1, 2, 4, 8};
+static const char *const AA_NAMES[] = {"Off (original)", "2x MSAA", "4x MSAA", "8x MSAA"};
 static const char *const LANG_NAMES[] = {"Japanese", "English", "French", "German", "Spanish", "Italian"};
 static const char *const REPORT_KINDS[] = {"Graphics", "Audio", "Controls", "Gameplay", "Crash or freeze",
                                            "Slow or stutter", "Other"};
 static const char *const ONOFF[] = {"Off", "On"};
 
-static int g_res_i, g_aniso_i, g_kind_i;
+static int g_res_i, g_aniso_i, g_aa_i, g_kind_i;
 static char g_folder_text[96]; /* where the game files are, for the Game page */
 
 static void size_names(void)
@@ -1022,6 +1024,7 @@ static void sync_from_settings(void)
     g_res_i = index_of(RES_H, (int)(sizeof RES_H / sizeof RES_H[0]), g_settings.height);
     g_win_i = index_of(WIN_H, (int)(sizeof WIN_H / sizeof WIN_H[0]), g_settings.window_height);
     g_aniso_i = index_of(ANISO, (int)(sizeof ANISO / sizeof ANISO[0]), g_settings.anisotropy);
+    g_aa_i = index_of(AA, (int)(sizeof AA / sizeof AA[0]), g_settings.antialiasing);
 }
 
 /* Resolution or VSync: reset the device now. The menu's state block belongs to the old device
@@ -1040,6 +1043,11 @@ static void changed_display(void)
     sync_from_settings(); /* a failed reset keeps the old resolution */
     if (g_host.apply_window)
         g_host.apply_window();
+}
+static void changed_aa(void)
+{
+    g_settings.antialiasing = AA[g_aa_i];
+    changed_display(); /* a new multisampled scene target, through the same device reset */
 }
 static void changed_window(void)
 {
@@ -1084,6 +1092,8 @@ static Item g_display[] = {
            "Wider shapes show more of the world at the sides."),
     CHOICE("Window size", g_win_i, WIN_NAMES, 0, changed_window, "The size of the game window."),
     TOGGLE("Full screen", g_settings.fullscreen, 0, NULL, "Fill the whole screen."),
+    CHOICE("Anti-aliasing", g_aa_i, AA_NAMES, 0, changed_aa,
+           "Smooths jagged edges on outlines, buildings and rails. Higher settings cost more graphics card time."),
     CHOICE("Texture filtering", g_aniso_i, ANISO_NAMES, 0, changed_aniso,
            "Keeps textures sharp on surfaces seen at an angle, like floors and roads."),
     TOGGLE("Show FPS", g_settings.show_fps, 0, changed_save, "Shows the frame rate in the top left corner."),
@@ -1296,8 +1306,16 @@ static void draw_frozen(float o)
     DWORD c = 0xFF000000u | (DWORD)k << 16 | (DWORD)k << 8 | k;
     Vertex v[6];
     float w = (float)g_bw - 0.5f, h = (float)g_bh - 0.5f;
+    IDirect3DSurface9 *bb = NULL, *old_rt = NULL;
     if (!g_frozen)
         return;
+    /* Into the device's back buffer, like the rest of the menu: the current target is the game's,
+     * which with anti-aliasing on is a separate multisampled surface. Drawn there, the frozen
+     * frame never reached the screen, and the menu's translucent layers piled up frame after
+     * frame (the background stripes turned solid). */
+    IDirect3DDevice9Ex_GetRenderTarget(DEV, 0, &old_rt);
+    IDirect3DDevice9Ex_GetBackBuffer(DEV, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb);
+    IDirect3DDevice9Ex_SetRenderTarget(DEV, 0, bb);
     v[0] = (Vertex){-0.5f, -0.5f, 0, 1, c, 0, 0};
     v[1] = (Vertex){w, -0.5f, 0, 1, c, 1, 0};
     v[2] = (Vertex){-0.5f, h, 0, 1, c, 0, 1};
@@ -1323,6 +1341,11 @@ static void draw_frozen(float o)
     IDirect3DDevice9Ex_BeginScene(DEV);
     IDirect3DDevice9Ex_DrawPrimitiveUP(DEV, D3DPT_TRIANGLELIST, 2, v, sizeof(Vertex));
     IDirect3DDevice9Ex_EndScene(DEV);
+    IDirect3DDevice9Ex_SetRenderTarget(DEV, 0, old_rt);
+    if (old_rt)
+        IDirect3DSurface9_Release(old_rt);
+    if (bb)
+        IDirect3DSurface9_Release(bb);
 }
 
 /* Slow diagonal stripes drifting across the background, JSRF poster style. */

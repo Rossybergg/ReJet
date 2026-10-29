@@ -265,6 +265,81 @@ void d3d_note_shader_compile(void) /* shadercache.c, on a cache miss (no progres
 {
 }
 
+/* ------------------------------------------------------------------ anti-aliasing (MSAA) */
+
+/* With anti-aliasing on, the game's back buffer and depth (g_host_bb, g_host_depth) are a
+ * multisampled colour and depth surface instead of the device's own; the scene is resolved
+ * into the device's back buffer (g_real_bb) at Swap, before screenshots, captures, the ReJet
+ * menu and Present read it, and before the game copies the screen (CopyRects: the boost
+ * effect). Render-to-texture targets stay single-sampled. Off (the default) uses the device's
+ * surfaces directly, as before. */
+static IDirect3DSurface9 *g_real_bb, *g_ms_bb, *g_ms_depth;
+static D3DMULTISAMPLE_TYPE g_ms_type;
+
+/* The setting's sample count, lowered to what the graphics card supports. */
+static D3DMULTISAMPLE_TYPE msaa_wanted(void)
+{
+    for (int n = g_settings.antialiasing >= 8 ? 8 : g_settings.antialiasing >= 4 ? 4 : g_settings.antialiasing >= 2 ? 2 : 0;
+         n >= 2; n /= 2)
+        if (SUCCEEDED(IDirect3D9Ex_CheckDeviceMultiSampleType(g_d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+                                                               D3DFMT_X8R8G8B8, TRUE, (D3DMULTISAMPLE_TYPE)n, NULL)) &&
+            SUCCEEDED(IDirect3D9Ex_CheckDeviceMultiSampleType(g_d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+                                                               D3DFMT_D24S8, TRUE, (D3DMULTISAMPLE_TYPE)n, NULL)))
+            return (D3DMULTISAMPLE_TYPE)n;
+    return D3DMULTISAMPLE_NONE;
+}
+
+static void msaa_release(void)
+{
+    IDirect3DSurface9 **s[] = {&g_host_bb, &g_host_depth, &g_real_bb, &g_ms_bb, &g_ms_depth};
+    for (unsigned i = 0; i < sizeof s / sizeof s[0]; i++)
+        if (*s[i]) {
+            IDirect3DSurface9_Release(*s[i]);
+            *s[i] = NULL;
+        }
+    g_ms_type = D3DMULTISAMPLE_NONE;
+}
+
+/* After device creation or a reset (the device's own back buffer and depth are current):
+ * pick the game's back buffer and depth, multisampled or not, and make them current. */
+static void msaa_setup(void)
+{
+    D3DMULTISAMPLE_TYPE t = msaa_wanted();
+    msaa_release();
+    IDirect3DDevice9Ex_GetBackBuffer(g_dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &g_real_bb);
+    if (t != D3DMULTISAMPLE_NONE &&
+        SUCCEEDED(IDirect3DDevice9Ex_CreateRenderTarget(g_dev, g_hw, g_hh, D3DFMT_X8R8G8B8, t, 0, FALSE, &g_ms_bb,
+                                                         NULL)) &&
+        SUCCEEDED(IDirect3DDevice9Ex_CreateDepthStencilSurface(g_dev, g_hw, g_hh, D3DFMT_D24S8, t, 0, FALSE,
+                                                                &g_ms_depth, NULL))) {
+        g_ms_type = t;
+        g_host_bb = g_ms_bb;
+        g_host_depth = g_ms_depth;
+        IDirect3DSurface9_AddRef(g_host_bb);
+        IDirect3DSurface9_AddRef(g_host_depth);
+        IDirect3DDevice9Ex_SetRenderTarget(g_dev, 0, g_host_bb);
+        IDirect3DDevice9Ex_SetDepthStencilSurface(g_dev, g_host_depth);
+        IDirect3DDevice9Ex_Clear(g_dev, 0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, 0, 1.0f, 0);
+    }
+    else {
+        if (g_ms_bb) { /* the depth surface failed */
+            IDirect3DSurface9_Release(g_ms_bb);
+            g_ms_bb = NULL;
+        }
+        IDirect3DDevice9Ex_GetRenderTarget(g_dev, 0, &g_host_bb);
+        IDirect3DDevice9Ex_GetDepthStencilSurface(g_dev, &g_host_depth);
+    }
+    log_printf("d3d: anti-aliasing %s (setting %d)\n", g_ms_type ? (g_ms_type == 2 ? "2x MSAA" : g_ms_type == 4 ? "4x MSAA" : "8x MSAA") : "off",
+               g_settings.antialiasing);
+}
+
+/* The multisampled scene into the device's back buffer (nothing to do with anti-aliasing off). */
+static void msaa_resolve(void)
+{
+    if (g_ms_bb && g_real_bb)
+        IDirect3DDevice9Ex_StretchRect(g_dev, g_ms_bb, NULL, g_real_bb, NULL, D3DTEXF_NONE);
+}
+
 static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, HWND hFocusWindow, DWORD BehaviorFlags,
                                                XD3DPRESENT_PARAMETERS *pp, void **ppDevice)
 {
@@ -354,8 +429,7 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
     g_th = h;
     g_tsx = g_sx;
     g_tsy = g_sy;
-    IDirect3DDevice9Ex_GetRenderTarget(g_dev, 0, &g_host_bb);           /* for render-to-texture */
-    IDirect3DDevice9Ex_GetDepthStencilSurface(g_dev, &g_host_depth);
+    msaa_setup(); /* the game's back buffer and depth (multisampled with anti-aliasing on) */
     /* no widescreen squeeze yet: 2D programs keep their x scale */
     g_vconst[VSH_C_2D][0] = g_vconst[VSH_C_2D][1] = g_vconst[VSH_C_2D][2] = g_vconst[VSH_C_2D][3] = 1.0f;
     log_printf("d3d: Direct3D 9Ex device ready, window %p\n", (void *)g_wnd);
@@ -737,6 +811,7 @@ static DWORD XBAPI hle_D3DDevice_Swap(DWORD Flags)
         IDirect3DDevice9Ex_EndScene(g_dev);
         g_in_scene = 0;
     }
+    msaa_resolve(); /* everything below reads the device's back buffer */
     maybe_screenshot();
     testing_hotkeys(); /* before Present: the back buffer still holds this frame */
     if (g_dev) {
@@ -1900,13 +1975,9 @@ static void change_display(void)
     hp.BackBufferHeight = h;
     hp.PresentationInterval = g_settings.vsync ? D3DPRESENT_INTERVAL_ONE : D3DPRESENT_INTERVAL_IMMEDIATE;
     if (hp.BackBufferWidth == g_hp.BackBufferWidth && hp.BackBufferHeight == g_hp.BackBufferHeight &&
-        hp.PresentationInterval == g_hp.PresentationInterval)
+        hp.PresentationInterval == g_hp.PresentationInterval && msaa_wanted() == g_ms_type)
         return;
-    if (g_host_bb)
-        IDirect3DSurface9_Release(g_host_bb);
-    if (g_host_depth)
-        IDirect3DSurface9_Release(g_host_depth);
-    g_host_bb = g_host_depth = NULL;
+    msaa_release(); /* the scene surfaces are made again at the new size */
     hr = IDirect3DDevice9Ex_ResetEx(g_dev, &hp, NULL);
     if (FAILED(hr)) {
         log_printf("d3d: ResetEx to %ux%u failed (%08lX); keeping %ux%u\n", w, h, hr, g_hw, g_hh);
@@ -1923,8 +1994,7 @@ static void change_display(void)
         g_sx = (float)g_hw / (float)g_xw;
         g_sy = (float)g_hh / (float)g_xh;
     }
-    IDirect3DDevice9Ex_GetRenderTarget(g_dev, 0, &g_host_bb);
-    IDirect3DDevice9Ex_GetDepthStencilSurface(g_dev, &g_host_depth);
+    msaa_setup();
     for (unsigned i = 0; i < g_rt_count; i++)
         if (!rt_create_host(&g_rt[i]))
             log_printf("d3d: render target #%u could not be recreated\n", i);
@@ -2041,6 +2111,10 @@ static HRESULT XBAPI hle_D3DDevice_CopyRects(XD3DSurface *pSrc, const RECT *pSrc
     if (g_in_scene) { /* copies go between scenes */
         IDirect3DDevice9Ex_EndScene(g_dev);
         g_in_scene = 0;
+    }
+    if (src == g_ms_bb && g_ms_bb) { /* a multisampled surface can't be copied part by part: resolve it */
+        msaa_resolve();
+        src = g_real_bb;
     }
     {
         float dsx = (float)d->hw / (float)d->w, dsy = (float)d->hh / (float)d->h;

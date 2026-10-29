@@ -55,7 +55,7 @@ Three goals before the next alpha: a measured, steady 60 fps; anti-aliasing and 
 
 In order of value:
 
-1. **MSAA (2x, 4x, 8x).**
+1. **MSAA (2x, 4x, 8x). Done 10-29** (the Display page, live; no measurable cost at 2560x1440 on the development PC). Render-to-texture targets stay single-sampled for now.
    - The biggest visual win: the cel-shaded outlines and the city's geometry edges shimmer badly at any resolution.
    - Render into multisampled render targets, then resolve before the game reads them back (render-to-texture, CopyRects, the boost effect, the screenshot path).
    - Must not break the 2D texcoord inset, or the depth-based effects.

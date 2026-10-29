@@ -24,6 +24,7 @@ typedef struct Settings {
     int fullscreen;    /* 1 = borderless window over the whole monitor */
     int anisotropy;    /* texture filtering: 1 = as the game asks (default), 2-16 = anisotropic */
     int show_fps;      /* frame-rate counter in the corner */
+    int antialiasing;  /* MSAA samples: 1 = off (default, as the Xbox), 2, 4 or 8 */
     /* [Audio] */
     int volume;             /* master volume in percent (default 100) */
     int mute_in_background; /* silent while another program has the focus */

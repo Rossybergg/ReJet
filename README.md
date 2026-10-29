@@ -60,6 +60,7 @@ Press **F1**, or **Back and Start together** on a controller, at any time. The g
 - **Any resolution**, up to 4K: much sharper than the Xbox's 640×480, changed live from the menu.
 - **Widescreen** in 16:10, 16:9 or 21:9. You see more of the city at the sides rather than a stretched picture, and the HUD keeps its proper shape.
 - **Full screen or a window**, at whatever size you like, sharp on high-DPI screens.
+- **Anti-aliasing** (2x, 4x or 8x MSAA) for smooth edges on the outlines and the city.
 - **Sharper textures** with anisotropic filtering (great on floors and roads at an angle).
 - **Cleaner 2D**: no dark fringes or stray lines around text and menus at high resolutions.
 - **Volume control**, mute while you're in another window, an FPS counter, VSync.
@@ -69,7 +70,6 @@ Press **F1**, or **Back and Start together** on a controller, at any time. The g
 
 ## What's planned
 
-- **Anti-aliasing** (MSAA) for smoother edges.
 - **HUD at the screen edges in widescreen** (it currently stays in the middle 4:3 area).
 - **Right-stick camera control** and **button remapping**.
 - **Your own music**: the Xbox let Jet Set Radio Future play songs from its hard drive, and ReJet could map that to a folder on your PC.

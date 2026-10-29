@@ -18,12 +18,12 @@ What ReJet adds to the original game, done and planned. Every enhancement is a s
 | FPS counter | Live. |
 | Volume, mute in background | Live; music is lowered while the menu is open. |
 | Always 60 Hz | The PAL disc runs as PAL60; 50 Hz is gone. |
+| Anti-aliasing (MSAA 2x, 4x, 8x) | Smooth edges on outlines and geometry; Display page, live, off by default. The game draws into a multisampled colour and depth surface, resolved into the back buffer at Swap and before screen copies (d3d.c, `msaa_*`); render-to-texture targets stay single-sampled. |
 
 ## Next (Phase 4)
 
 | Idea | Why | What it needs |
 |---|---|---|
-| MSAA | Smoother edges. | A multisampled scene buffer resolved into the back buffer (and back to the DISCARD swap effect); the device reset path exists now. |
 | HUD anchored to the screen edges in widescreen | The HUD now sits in the middle 4:3 area. | Per element: move edge-anchored HUD pieces (health bar, can counter) outwards; needs the HUD's draw sites. |
 | Right-stick camera | The original camera only recentres (L trigger); a right-stick orbit is standard now. | Hook the camera update (docs/SUBSYSTEMS.md); ReWhacked's orbit camera is the model. |
 | Button remapping | Players expect it on PC; keyboard layout is fixed now. | A Controls page that edits bindings, saved to `rejet.ini`. |
