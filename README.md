@@ -58,7 +58,7 @@ Your saves and settings are kept between sessions.
 
 ## The ReJet menu
 
-Press **F1**, or **Back and Start together** on a controller, at any time. The game pauses and the ReJet menu slides in, styled after the game's own Garage screens, with a small picture of the paused game beside it. It works with a controller (with proper button icons) or the keyboard, and everything you change is saved straight away.
+Press **F1**, or **Back and Start together** on a controller, at any time. The game pauses and the ReJet menu slides in, styled after the game's own Garage screens: a row of tiles on the pause page, and a picture of the paused game beside the settings. It works with a controller (with proper button icons) or the keyboard, and everything you change is saved straight away.
 
 ## What's new compared with the Xbox
 
@@ -71,6 +71,7 @@ Press **F1**, or **Back and Start together** on a controller, at any time. The g
 - **Volume control**, mute while you're in another window, an FPS counter, VSync.
 - **Smooth frame pacing**: on 60, 120 and 240 Hz displays every frame lines up with the screen's refresh, so motion stays even.
 - **Always 60 Hz**: the European disc's 50 Hz mode is gone, so the game always runs at full speed.
+- **A choice of HUD** (Game > HUD): *Classic* is the game's own, *ReJet* redraws the health bar and can count in a cleaner cel-shaded style at the screen's edge (early: more of the HUD to come).
 - **Skip the graffiti warning** at start-up with Start or A, like the logo movies.
 - **First-time setup** that finds and checks your game for you.
 - **Built-in bug reporting**: one menu option saves everything needed to look into a problem.
@@ -89,7 +90,7 @@ The same frame of the intro fly-through, rendered by ReJet with the original loo
 
 ## What's planned
 
-- **A sharper, widescreen-aware HUD** (the game's HUD stays in the middle 4:3 area for now).
+- **The full ReJet HUD**: boost, score, trick text and how many tags are left, in single player and split screen.
 - **Right-stick camera control** and **button remapping**.
 - **Your own music**: the Xbox let Jet Set Radio Future play songs from its hard drive, and ReJet could map that to a folder on your PC.
 - **Skipping the intro logos**, and controller rumble on/off.
