@@ -12,6 +12,8 @@ enum {
     PERF_PRESENT, /* EndScene + Present */
     PERF_IO,      /* NtCreateFile / NtOpenFile */
     PERF_LOG,     /* log_printf */
+    PERF_LATE,    /* vblank wait: woken after the boundary (part of wait, not work) */
+    PERF_VBCB,    /* the game's vblank callback, run inside the wait */
     PERF_COUNT
 };
 
@@ -33,6 +35,10 @@ static __inline void perf_end(int id, LONGLONG start)
 
 /* Call once per Swap, before waiting for vblank. Logs frames whose work took longer than
  * REJET_PERF milliseconds (default 40; 0 = off). */
-void perf_frame(unsigned long frame);
+void perf_frame(unsigned long frame, unsigned long draws);
+/* F10 marker number, written into the next CSV row (REJET_PERFLOG). */
+void perf_mark(long n);
+/* REJET_PROFILE=1: start sampling the calling thread (profile.c). */
+void profile_start(void);
 /* Call after the vblank wait: the next frame's work starts here. */
 void perf_wait_done(void);

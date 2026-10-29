@@ -51,6 +51,8 @@ Set as environment variables before starting `ReJet.exe`:
 | `REJET_TRACE=1` | Every kernel call in the log |
 | `REJET_HANGDUMP=<s>` | Thread dump after s seconds (also written on timeout) |
 | `REJET_PERF=<ms>` | Frames slower than ms, with a time breakdown |
+| `REJET_PERFLOG=1` | Every frame to `logs\perf_<time>.csv` (work and wait times, ReJet's hot paths, draws, F10 markers); `python tools/perf_report.py [csv]` summarises it (time on screen per frame, stutters and their causes) |
+| `REJET_PROFILE=1` | Samples the game thread while it works on a frame and logs where the time goes every 30 s (ReJet functions by name from `rejet.pdb`, other modules by name, game code by address) |
 | `REJET_AUDIODUMP=1` | The final audio mix to `mix.wav` |
 | `REJET_DUMPVS=1` | Vertex programs and declarations to `vsh\` |
 | `REJET_INI=<file>` | Another settings file instead of `rejet.ini` |

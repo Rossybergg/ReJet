@@ -630,6 +630,7 @@ static LRESULT CALLBACK setup_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 int setup_run(const WCHAR *exe_dir, WCHAR *folder, unsigned cap)
 {
     WNDCLASSEXW wc;
+    HMODULE self = NULL;
     MSG msg;
     RECT r;
     typedef BOOL(WINAPI * SetDpiContextFn)(HANDLE);
@@ -649,8 +650,11 @@ int setup_run(const WCHAR *exe_dir, WCHAR *folder, unsigned cap)
     wc.lpfnWndProc = setup_proc;
     wc.hInstance = GetModuleHandleW(NULL);
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
-    wc.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1)); /* the exe's ReJet icon */
-    wc.hIconSm = (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+    /* the ReJet icon from rejet.dll: ReJet.exe's resources are overwritten by the XBE image */
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)(void *)setup_proc, &self);
+    wc.hIcon = LoadIconW(self, MAKEINTRESOURCEW(1));
+    wc.hIconSm = (HICON)LoadImageW(self, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
                                    GetSystemMetrics(SM_CYSMICON), 0);
     wc.lpszClassName = L"rejet_setup";
     RegisterClassExW(&wc);

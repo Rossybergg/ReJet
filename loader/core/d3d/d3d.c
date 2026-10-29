@@ -136,14 +136,18 @@ static DWORD WINAPI window_thread(void *arg)
     WNDCLASSEXW wc;
     RECT r = {0, 0, req->width, req->height};
     MSG msg;
+    HMODULE self = NULL;
 
     memset(&wc, 0, sizeof wc);
     wc.cbSize = sizeof wc;
     wc.lpfnWndProc = wnd_proc;
     wc.hInstance = GetModuleHandleW(NULL);
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
-    wc.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1)); /* the exe's ReJet icon */
-    wc.hIconSm = (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+    /* the ReJet icon from rejet.dll: ReJet.exe's resources are overwritten by the XBE image */
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)(void *)wnd_proc, &self);
+    wc.hIcon = LoadIconW(self, MAKEINTRESOURCEW(1));
+    wc.hIconSm = (HICON)LoadImageW(self, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
                                    GetSystemMetrics(SM_CYSMICON), 0);
     wc.lpszClassName = L"rejet";
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH); /* letterbox bars */
@@ -462,8 +466,11 @@ static void run_vblank_callbacks(void)
     EnterCriticalSection(&g_vblank_lock);
     while (g_vblank_count < now) {
         g_vblank_count++;
-        if (g_vblank_callback)
+        if (g_vblank_callback) {
+            LONGLONG t0 = perf_now();
             ((void(__cdecl *)(void *))g_vblank_callback)(NULL);
+            perf_end(PERF_VBCB, t0);
+        }
     }
     LeaveCriticalSection(&g_vblank_lock);
 }
@@ -474,9 +481,9 @@ static void run_vblank_callbacks(void)
  * Each waiting thread sleeps on its own high-resolution waitable timer until the boundary. */
 static __declspec(thread) HANDLE t_vblank_timer;
 
-static void wait_vblank(void)
+/* Sleep until vertical blank number `target` (counted from the start, at g_vblank_hz). */
+static void wait_vblank_until(ULONG target)
 {
-    ULONG start = vblank_now();
     LARGE_INTEGER now, due;
     run_vblank_callbacks();
     if (!t_vblank_timer) {
@@ -485,10 +492,13 @@ static void wait_vblank(void)
             t_vblank_timer = CreateWaitableTimerW(NULL, FALSE, NULL);
     }
     for (;;) {
-        LONGLONG boundary = g_vblank_start.QuadPart + ((LONGLONG)(start + 1) * g_qpf.QuadPart + g_vblank_hz - 1) / g_vblank_hz;
+        LONGLONG boundary = g_vblank_start.QuadPart + ((LONGLONG)target * g_qpf.QuadPart + g_vblank_hz - 1) / g_vblank_hz;
         QueryPerformanceCounter(&now);
-        if (now.QuadPart >= boundary)
+        if (now.QuadPart >= boundary) {
+            InterlockedExchangeAdd64(&g_perf_ticks[PERF_LATE], now.QuadPart - boundary);
+            InterlockedIncrement(&g_perf_calls[PERF_LATE]);
             break;
+        }
         /* relative due time in 100 ns units (negative) */
         due.QuadPart = -(LONGLONG)((boundary - now.QuadPart) * 10000000 / g_qpf.QuadPart);
         if (due.QuadPart == 0 || !t_vblank_timer || !SetWaitableTimer(t_vblank_timer, &due, 0, NULL, NULL, FALSE))
@@ -497,6 +507,34 @@ static void wait_vblank(void)
             WaitForSingleObject(t_vblank_timer, INFINITE);
     }
     run_vblank_callbacks();
+}
+
+static void wait_vblank(void)
+{
+    wait_vblank_until(vblank_now() + 1);
+}
+
+/* Frame pacing for Swap. Each frame is due at the vblank after the previous one. A frame that
+ * misses its vblank by less than a frame is shown straight away and the next one is due at the
+ * following vblank, as before: the cadence holds and the game still makes 60 frames a second.
+ * Waiting for the next vblank instead (as BlockUntilVerticalBlank does) turned every frame that
+ * was a fraction of a millisecond late into a 33 ms stutter, and on a lightly loaded PC the CPU
+ * clock drops often enough to make that happen several times a minute. More than a frame late
+ * (loading): start a new cadence at the next vblank. */
+static ULONG g_swap_due; /* the vblank the next frame is due at; 0 = none yet */
+
+static void wait_swap(void)
+{
+    ULONG now = vblank_now();
+    if (g_swap_due && now < g_swap_due) /* on time: wait for it */
+        wait_vblank_until(g_swap_due);
+    else if (g_swap_due && now == g_swap_due) /* late by less than a frame: show it now */
+        run_vblank_callbacks();
+    else { /* the first frame, or a long one: a new cadence */
+        g_swap_due = now + 1;
+        wait_vblank_until(g_swap_due);
+    }
+    g_swap_due++;
 }
 
 static void XBAPI hle_D3DDevice_BlockUntilVerticalBlank(void)
@@ -604,6 +642,7 @@ static void testing_hotkeys(void)
         marks_done++;
         log_printf("==================== MARK %ld at frame %lu ====================\n", marks_done, g_frame);
         menu_toast("Marker %ld written to the log", marks_done);
+        perf_mark(marks_done);
     }
     if (g_capture_log && g_frame == g_capture_frame) { /* the captured frame just ended */
         capture_finish();
@@ -689,8 +728,8 @@ static void maybe_screenshot(void)
 static DWORD XBAPI hle_D3DDevice_Swap(DWORD Flags)
 {
     LONGLONG t0;
-    perf_frame(g_frame);
-    wait_vblank(); /* presentation interval ONE */
+    perf_frame(g_frame, g_frame_draws);
+    wait_swap(); /* presentation interval ONE */
     perf_wait_done();
     t0 = perf_now();
     if (g_dev && g_in_scene) {
@@ -1408,6 +1447,16 @@ static void XBAPI hle_D3DDevice_SetRenderState_FogColor(DWORD v)
 static void XBAPI hle_D3DDevice_SetRenderState_NormalizeNormals(DWORD v)
 {
     rs(D3DRS_NORMALIZENORMALS, v != 0);
+}
+
+/* ZBias (0-16, higher = nearer) pulls coplanar decals in front of the surface under them:
+ * sprayed graffiti on walls. D3D9 has a depth bias added to z instead; the scale is the usual
+ * D3D8 to D3D9 one (as d3d8to9). */
+static void XBAPI hle_D3DDevice_SetRenderState_ZBias(DWORD v)
+{
+    float bias = (float)v * -0.000005f;
+    SURVEY(8) log_printf("d3d: ZBias %lu\n", v);
+    rs(D3DRS_DEPTHBIAS, *(DWORD *)&bias);
 }
 
 /* Xbox texture-stage state: D3D keeps TextureState[stage][32] at 0x19E9A0 and the engine writes
@@ -2874,7 +2923,7 @@ const HlePatch g_d3d_patches[] = {
     P(D3DDevice_SetRenderState_ShadowFunc, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_LineWidth, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_Dxt1NoiseEnable, stub_SetRenderState_1arg),
-    P(D3DDevice_SetRenderState_ZBias, stub_SetRenderState_1arg),
+    P(D3DDevice_SetRenderState_ZBias, hle_D3DDevice_SetRenderState_ZBias),
     P(D3DDevice_SetRenderState_LogicOp, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_BackFillMode, stub_SetRenderState_1arg),
     P(D3DDevice_SetRenderState_TwoSidedLighting, stub_SetRenderState_1arg),

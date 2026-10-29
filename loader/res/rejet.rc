@@ -1,5 +1,8 @@
-/* rejet.dll resources: the ReJet logo for the in-game menu (ui/menu.c) and the version. */
+/* rejet.dll resources: the ReJet logo for the in-game menu (ui/menu.c), the icon for the game
+ * and setup windows (the exe's own resources are gone once the XBE is mapped over its image)
+ * and the version. */
 REJET_LOGO RCDATA "rejet_logo.png"
+1 ICON "rejet.ico"
 
 #define REJET_FILE_DESC "ReJet loader library"
 #define REJET_FILE_NAME "rejet.dll"

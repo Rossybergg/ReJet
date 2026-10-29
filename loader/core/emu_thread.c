@@ -67,6 +67,34 @@ void emu_arm_watchpoint(void)
  * Xbox code (XAPI threads, the entry thread, kernel DPC/timer threads) shares one host core,
  * with Windows' priority scheduling standing in for the Xbox's; host threads (window, D3D,
  * mixer, XAudio2) use the others. REJET_XBOXCPU=<n> picks the core, =all turns this off. */
+/* Keep ReJet's host threads (and the graphics driver's) off the Xbox core and its hyperthread
+ * sibling: work on the sibling slowed the game thread to less than half speed in some frames
+ * (a timed fixed loop took 77 instead of 33 us), and each of those frames missed its vblank.
+ * Soft: Windows' default CPU sets for the process; the Xbox threads' affinity overrides it. */
+static void reserve_xbox_core(DWORD_PTR mask)
+{
+    DWORD_PTR core = mask;
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION lpi[256];
+    DWORD len = sizeof lpi;
+    unsigned char cs[64 * 32];
+    ULONG cs_len = 0, ids[64], n = 0;
+    if (GetLogicalProcessorInformation(lpi, &len))
+        for (DWORD i = 0; i < len / sizeof lpi[0]; i++)
+            if (lpi[i].Relationship == RelationProcessorCore && (lpi[i].ProcessorMask & mask))
+                core = lpi[i].ProcessorMask;
+    if (!GetSystemCpuSetInformation((PSYSTEM_CPU_SET_INFORMATION)cs, sizeof cs, &cs_len, GetCurrentProcess(), 0))
+        return;
+    for (ULONG off = 0; off < cs_len && n < 64;) {
+        PSYSTEM_CPU_SET_INFORMATION c = (PSYSTEM_CPU_SET_INFORMATION)(cs + off);
+        if (c->Type == CpuSetInformation && c->CpuSet.Group == 0 &&
+            !(core & ((DWORD_PTR)1 << c->CpuSet.LogicalProcessorIndex)))
+            ids[n++] = c->CpuSet.Id;
+        off += c->Size;
+    }
+    if (n && SetProcessDefaultCpuSets(GetCurrentProcess(), ids, n))
+        log_printf("emu: host threads kept off the Xbox core (mask %08lX)\n", (unsigned long)core);
+}
+
 static DWORD_PTR xbox_cpu_mask(void)
 {
     static DWORD_PTR mask = (DWORD_PTR)-1;
@@ -88,6 +116,8 @@ static DWORD_PTR xbox_cpu_mask(void)
             if (mask == proc) /* a single-core machine: nothing to separate */
                 mask = 0;
         }
+        if (mask)
+            reserve_xbox_core(mask);
         if (mask)
             log_printf("emu: Xbox threads on host core mask %08lX (process mask %08lX)\n", (unsigned long)mask,
                        (unsigned long)proc);

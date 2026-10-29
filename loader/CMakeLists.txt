@@ -18,6 +18,7 @@ add_library(rejet SHARED
   core/emu_thread.c
   core/hle.c
   core/perf.c
+  core/profile.c
   core/settings.c
   core/fs_patches.gen.c
   core/kernel_imports.gen.c
@@ -43,8 +44,11 @@ add_library(rejet SHARED
   res/rejet.rc)
 target_include_directories(rejet PRIVATE core ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 target_compile_options(rejet PRIVATE /W4 /arch:IA32)
-target_link_libraries(rejet PRIVATE shell32 gdi32 comdlg32 windowscodecs d3d9 d3dcompiler xinput xaudio2 ole32)
-target_link_options(rejet PRIVATE /LARGEADDRESSAWARE)
+target_link_libraries(rejet PRIVATE shell32 gdi32 comdlg32 windowscodecs d3d9 d3dcompiler xinput xaudio2 ole32 dbghelp psapi winmm)
+# Symbols for the profiler (REJET_PROFILE) and crash logs: rejet.pdb next to the dll, never
+# packaged. /PDBALTPATH keeps the build machine's path out of the dll.
+target_compile_options(rejet PRIVATE /Zi)
+target_link_options(rejet PRIVATE /LARGEADDRESSAWARE /DEBUG /OPT:REF /OPT:ICF /PDBALTPATH:%_PDB%)
 
 # ReJet.exe (target ReJetLoader): tiny stub that owns 0x10000.. (see ReWhacked's docs/LOADER.md).
 add_executable(ReJetLoader stub/stub.c res/loader.rc)

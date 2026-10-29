@@ -23,9 +23,11 @@
 typedef struct Entry {
     const XD3DPixelContainer *x;
     uint32_t data, format, size;
-    unsigned long long hash;
+    unsigned long long hash; /* sample_hash: the texture's name for HD replacements */
+    unsigned long long quick; /* quick_hash: the per-frame change check */
     unsigned long checked; /* tex frame of the last content check */
     IDirect3DBaseTexture9 *host;
+    IDirect3DBaseTexture9 *stage; /* system-memory copy, kept for textures that are re-uploaded */
     int hd; /* host is an HD replacement (hdtex.c), not sized like the original */
     int decoded; /* DXT decoded to A8R8G8B8 (FormatInfo.decode) */
 } Entry;
@@ -150,18 +152,20 @@ static void bleed_colour(DWORD *px, unsigned w, unsigned h)
         known[i] = (px[i] >> 24) != 0;
     for (int pass = 0; pass < 4; pass++) {
         int changed = 0;
-        for (unsigned y = 0; y < h; y++)
+        for (unsigned y = 0; y < h; y++) {
+            const unsigned rows[3] = {(y + h - 1) % h * w, y * w, (y + 1) % h * w}; /* textures wrap */
             for (unsigned x = 0; x < w; x++) {
+                const unsigned cols[3] = {x ? x - 1 : w - 1, x, x + 1 < w ? x + 1 : 0};
                 unsigned r = 0, g = 0, b = 0, n = 0;
                 if (known[y * w + x])
                     continue;
-                for (int dy = -1; dy <= 1; dy++)
-                    for (int dx = -1; dx <= 1; dx++) {
-                        unsigned nx = (x + dx + w) % w, ny = (y + dy + h) % h; /* textures wrap */
+                for (int dy = 0; dy < 3; dy++)
+                    for (int dx = 0; dx < 3; dx++) {
+                        const unsigned i = rows[dy] + cols[dx];
                         DWORD p;
-                        if (known[ny * w + nx] != 1)
+                        if (known[i] != 1)
                             continue;
-                        p = px[ny * w + nx];
+                        p = px[i];
                         r += (p >> 16) & 0xFF;
                         g += (p >> 8) & 0xFF;
                         b += p & 0xFF;
@@ -173,6 +177,7 @@ static void bleed_colour(DWORD *px, unsigned w, unsigned h)
                     changed = 1;
                 }
             }
+        }
         if (!changed)
             break;
         for (unsigned i = 0; i < w * h; i++)
@@ -269,6 +274,23 @@ static unsigned long long sample_hash(const unsigned char *p, unsigned bytes)
     return h;
 }
 
+/* The per-frame change check: the same samples as sample_hash, but in 32-bit arithmetic. A
+ * 64-bit multiply is a call (_allmul) in a 32-bit build, and sample_hash per texture per frame
+ * was a third of each frame's CPU time. Two independent lanes, so a change that one lane misses
+ * is still caught by the other. */
+static unsigned long long quick_hash(const unsigned char *p, unsigned bytes)
+{
+    unsigned a = 2166136261u, b = 0x9E3779B9u;
+    unsigned step = bytes > 65536 ? 61 : 1;
+    for (unsigned i = 0; i + 4 <= bytes; i += 4 * step) {
+        unsigned v = *(const unsigned *)(p + i);
+        a = (a ^ v) * 16777619u;
+        b = (b + v) * 0x85EBCA6Bu;
+        b ^= b >> 13;
+    }
+    return (unsigned long long)a << 32 | b;
+}
+
 static unsigned level_bytes(const FormatInfo *fi, unsigned w, unsigned h)
 {
     if (fi->dxt)
@@ -312,17 +334,34 @@ static void upload_level(const FormatInfo *fi, const unsigned char *src, unsigne
         return;
     }
     {
+        /* The swizzle interleaves x and y bits, so an offset is the OR of an x part and a y part:
+         * one table per axis instead of the bit loop per texel (uploads at area loads were
+         * 3.5 ms a texture and stalled frames). */
         unsigned bpp = fi->bpp / 8;
+        unsigned *sx = (unsigned *)malloc(((size_t)w + h) * sizeof *sx), *sy = sx + w;
+        if (!sx)
+            return;
+        for (unsigned x = 0; x < w; x++)
+            sx[x] = swizzle(x, 0, w, h);
+        for (unsigned y = 0; y < h; y++)
+            sy[y] = swizzle(0, y, w, h);
         for (unsigned y = 0; y < h; y++) {
             unsigned char *d = dst + y * lr->Pitch;
-            for (unsigned x = 0; x < w; x++) {
-                const unsigned char *s = src + swizzle(x, y, w, h) * bpp;
-                if (fi->expand_al8)
-                    ((unsigned short *)d)[x] = (unsigned short)(s[0] * 0x0101);
-                else
-                    memcpy(d + x * (fi->expand_al8 ? 2 : bpp), s, bpp);
-            }
+            const unsigned yo = sy[y];
+            if (fi->expand_al8)
+                for (unsigned x = 0; x < w; x++)
+                    ((unsigned short *)d)[x] = (unsigned short)(src[sx[x] | yo] * 0x0101);
+            else if (bpp == 4)
+                for (unsigned x = 0; x < w; x++)
+                    ((DWORD *)d)[x] = ((const DWORD *)src)[sx[x] | yo];
+            else if (bpp == 2)
+                for (unsigned x = 0; x < w; x++)
+                    ((unsigned short *)d)[x] = ((const unsigned short *)src)[sx[x] | yo];
+            else
+                for (unsigned x = 0; x < w; x++)
+                    memcpy(d + x * bpp, src + (size_t)(sx[x] | yo) * bpp, bpp);
         }
+        free(sx);
     }
 }
 
@@ -404,8 +443,9 @@ IDirect3DBaseTexture9 *tex_get(IDirect3DDevice9 *dev, const XD3DPixelContainer *
     int volume = XFMT_DIMENSION(x->Format) == 3;
     const unsigned char *data = (const unsigned char *)(UINT_PTR)x->Resource.Data;
     Entry *e = NULL;
-    unsigned long long hash;
+    unsigned long long hash, quick;
     LONGLONG t_up;
+    int keep_stage;
 
     texcoord_scale[0] = texcoord_scale[1] = 1.0f;
     if (tex_is_depth(x)) {
@@ -487,12 +527,14 @@ IDirect3DBaseTexture9 *tex_get(IDirect3DDevice9 *dev, const XD3DPixelContainer *
         if (e->checked == g_tex_frame)
             return e->host;
         e->checked = g_tex_frame;
-        hash = sample_hash(data, total);
-        if (e->hash == hash)
+        quick = quick_hash(data, total);
+        if (e->quick == quick)
             return e->host;
+        hash = sample_hash(data, total);
     }
     else {
         hash = sample_hash(data, total);
+        quick = quick_hash(data, total);
     }
     e->checked = g_tex_frame;
     t_up = perf_now();
@@ -508,6 +550,7 @@ IDirect3DBaseTexture9 *tex_get(IDirect3DDevice9 *dev, const XD3DPixelContainer *
         e->format = x->Format;
         e->size = x->Size;
         e->hash = hash;
+        e->quick = quick;
         perf_end(PERF_TEXUP, t_up);
         return e->host;
     }
@@ -520,25 +563,51 @@ IDirect3DBaseTexture9 *tex_get(IDirect3DDevice9 *dev, const XD3DPixelContainer *
         e->host = NULL;
     }
     e->decoded = fi.decode;
+    /* Uploads go through a system-memory texture and UpdateTexture into an ordinary (static)
+     * texture in video memory. Dynamic video-memory textures, locked directly, cost the driver
+     * milliseconds each to create and lock (2-3 ms for a 128x128 DXT1), and area loads upload
+     * a hundred at once. A texture uploaded a second time keeps its staging copy. */
+    if (!e->host && e->stage) {
+        IDirect3DBaseTexture9_Release(e->stage);
+        e->stage = NULL;
+    }
+    keep_stage = e->host != NULL;
     if (!e->host) {
         HRESULT hr;
         if (volume) {
             static LONG logged;
-            hr = IDirect3DDevice9_CreateVolumeTexture(dev, w, h, depth, levels, D3DUSAGE_DYNAMIC, fi.host,
-                                                      D3DPOOL_DEFAULT, (IDirect3DVolumeTexture9 **)&e->host, NULL);
+            hr = IDirect3DDevice9_CreateVolumeTexture(dev, w, h, depth, levels, 0, fi.host, D3DPOOL_DEFAULT,
+                                                      (IDirect3DVolumeTexture9 **)&e->host, NULL);
             if (InterlockedIncrement(&logged) <= 8)
                 log_printf("tex: volume %ux%ux%u levels %u fmt %02X -> %08lX\n", w, h, depth, levels, xf, hr);
         }
         else if (faces == 6)
-            hr = IDirect3DDevice9_CreateCubeTexture(dev, w, levels, D3DUSAGE_DYNAMIC, fi.host, D3DPOOL_DEFAULT,
+            hr = IDirect3DDevice9_CreateCubeTexture(dev, w, levels, 0, fi.host, D3DPOOL_DEFAULT,
                                                     (IDirect3DCubeTexture9 **)&e->host, NULL);
         else
-            hr = IDirect3DDevice9_CreateTexture(dev, w, h, levels, D3DUSAGE_DYNAMIC, fi.host, D3DPOOL_DEFAULT,
+            hr = IDirect3DDevice9_CreateTexture(dev, w, h, levels, 0, fi.host, D3DPOOL_DEFAULT,
                                                 (IDirect3DTexture9 **)&e->host, NULL);
         if (FAILED(hr)) {
             log_printf("tex: CreateTexture %ux%u fmt %02X failed (%08lX)\n", w, h, xf, hr);
             e->host = NULL;
             return NULL;
+        }
+    }
+    if (!e->stage) {
+        HRESULT hr;
+        if (volume)
+            hr = IDirect3DDevice9_CreateVolumeTexture(dev, w, h, depth, levels, 0, fi.host, D3DPOOL_SYSTEMMEM,
+                                                      (IDirect3DVolumeTexture9 **)&e->stage, NULL);
+        else if (faces == 6)
+            hr = IDirect3DDevice9_CreateCubeTexture(dev, w, levels, 0, fi.host, D3DPOOL_SYSTEMMEM,
+                                                    (IDirect3DCubeTexture9 **)&e->stage, NULL);
+        else
+            hr = IDirect3DDevice9_CreateTexture(dev, w, h, levels, 0, fi.host, D3DPOOL_SYSTEMMEM,
+                                                (IDirect3DTexture9 **)&e->stage, NULL);
+        if (FAILED(hr)) {
+            log_printf("tex: staging texture %ux%u fmt %02X failed (%08lX)\n", w, h, xf, hr);
+            e->stage = NULL;
+            return e->host;
         }
     }
     {
@@ -559,10 +628,9 @@ IDirect3DBaseTexture9 *tex_get(IDirect3DDevice9 *dev, const XD3DPixelContainer *
         unsigned lw = w, lh = h, ld = depth;
         for (unsigned l = 0; l < levels; l++) {
             D3DLOCKED_BOX lb;
-            if (SUCCEEDED(IDirect3DVolumeTexture9_LockBox((IDirect3DVolumeTexture9 *)e->host, l, &lb, NULL,
-                                                          l == 0 ? D3DLOCK_DISCARD : 0))) {
+            if (SUCCEEDED(IDirect3DVolumeTexture9_LockBox((IDirect3DVolumeTexture9 *)e->stage, l, &lb, NULL, 0))) {
                 upload_volume_level(&fi, p, lw, lh, ld, &lb);
-                IDirect3DVolumeTexture9_UnlockBox((IDirect3DVolumeTexture9 *)e->host, l);
+                IDirect3DVolumeTexture9_UnlockBox((IDirect3DVolumeTexture9 *)e->stage, l);
             }
             p += level_bytes(&fi, lw, lh) * ld;
             lw = lw > 1 ? lw / 2 : 1;
@@ -576,18 +644,17 @@ IDirect3DBaseTexture9 *tex_get(IDirect3DDevice9 *dev, const XD3DPixelContainer *
             unsigned lw = w, lh = h;
             for (unsigned l = 0; l < levels; l++) {
                 D3DLOCKED_RECT lr;
-                /* DISCARD may drop the whole resource, so only the very first lock may use it. */
-                DWORD lock = (f == 0 && l == 0) ? D3DLOCK_DISCARD : 0;
+                const DWORD lock = 0;
                 HRESULT hr = faces == 6
-                    ? IDirect3DCubeTexture9_LockRect((IDirect3DCubeTexture9 *)e->host, (D3DCUBEMAP_FACES)f, l, &lr,
+                    ? IDirect3DCubeTexture9_LockRect((IDirect3DCubeTexture9 *)e->stage, (D3DCUBEMAP_FACES)f, l, &lr,
                                                      NULL, lock)
-                    : IDirect3DTexture9_LockRect((IDirect3DTexture9 *)e->host, l, &lr, NULL, lock);
+                    : IDirect3DTexture9_LockRect((IDirect3DTexture9 *)e->stage, l, &lr, NULL, lock);
                 if (SUCCEEDED(hr)) {
                     upload_level(&fi, p, lw, lh, pitch, &lr);
                     if (faces == 6)
-                        IDirect3DCubeTexture9_UnlockRect((IDirect3DCubeTexture9 *)e->host, (D3DCUBEMAP_FACES)f, l);
+                        IDirect3DCubeTexture9_UnlockRect((IDirect3DCubeTexture9 *)e->stage, (D3DCUBEMAP_FACES)f, l);
                     else
-                        IDirect3DTexture9_UnlockRect((IDirect3DTexture9 *)e->host, l);
+                        IDirect3DTexture9_UnlockRect((IDirect3DTexture9 *)e->stage, l);
                 }
                 p += level_bytes(&fi, lw, lh);
                 lw = lw > 1 ? lw / 2 : 1;
@@ -608,13 +675,13 @@ IDirect3DBaseTexture9 *tex_get(IDirect3DDevice9 *dev, const XD3DPixelContainer *
             FILE *fp;
             CreateDirectoryA("movie", NULL);
             snprintf(name, sizeof name, "movie\\f%06lu_%ux%u.bin", g_tex_frame, w, h);
-            if (SUCCEEDED(IDirect3DTexture9_LockRect((IDirect3DTexture9 *)e->host, 0, &lr, NULL, D3DLOCK_READONLY))) {
+            if (SUCCEEDED(IDirect3DTexture9_LockRect((IDirect3DTexture9 *)e->stage, 0, &lr, NULL, D3DLOCK_READONLY))) {
                 if ((fp = fopen(name, "wb")) != NULL) {
                     for (unsigned y = 0; y < h; y++)
                         fwrite((const unsigned char *)lr.pBits + y * lr.Pitch, 4, w, fp);
                     fclose(fp);
                 }
-                IDirect3DTexture9_UnlockRect((IDirect3DTexture9 *)e->host, 0);
+                IDirect3DTexture9_UnlockRect((IDirect3DTexture9 *)e->stage, 0);
             }
         }
         env[0] = 0;
@@ -626,20 +693,40 @@ IDirect3DBaseTexture9 *tex_get(IDirect3DDevice9 *dev, const XD3DPixelContainer *
             CreateDirectoryA("texdump", NULL);
             snprintf(name, sizeof name, "texdump\\h%016llX_%ux%u_f%08lX.bin", hash, w, h, (unsigned long)fi.host);
             if (GetFileAttributesA(name) == INVALID_FILE_ATTRIBUTES &&
-                SUCCEEDED(IDirect3DTexture9_LockRect((IDirect3DTexture9 *)e->host, 0, &lr, NULL, D3DLOCK_READONLY))) {
+                SUCCEEDED(IDirect3DTexture9_LockRect((IDirect3DTexture9 *)e->stage, 0, &lr, NULL, D3DLOCK_READONLY))) {
                 if ((fp = fopen(name, "wb")) != NULL) {
                     for (unsigned y = 0; y < rows; y++)
                         fwrite((const unsigned char *)lr.pBits + y * lr.Pitch, 1, row, fp);
                     fclose(fp);
                 }
-                IDirect3DTexture9_UnlockRect((IDirect3DTexture9 *)e->host, 0);
+                IDirect3DTexture9_UnlockRect((IDirect3DTexture9 *)e->stage, 0);
             }
         }
+    }
+    IDirect3DDevice9_UpdateTexture(dev, e->stage, e->host);
+    if (!keep_stage) {
+        IDirect3DBaseTexture9_Release(e->stage);
+        e->stage = NULL;
     }
     e->data = x->Resource.Data;
     e->format = x->Format;
     e->size = x->Size;
     e->hash = hash;
+    e->quick = quick;
+    { /* uploads that stall a frame, for REJET_PERFLOG investigations */
+        static LONGLONG freq;
+        static LONG logged;
+        LONGLONG dt = perf_now() - t_up;
+        if (!freq) {
+            LARGE_INTEGER f;
+            QueryPerformanceFrequency(&f);
+            freq = f.QuadPart;
+        }
+        if (dt * 1000 > 2 * freq && InterlockedIncrement(&logged) <= 64)
+            log_printf("tex: slow upload %.1f ms: %ux%u x%u levels %u faces %u fmt %02X%s%s\n",
+                       (double)dt * 1000.0 / (double)freq, w, h, depth, levels, faces, xf,
+                       fi.decode ? " (DXT decoded)" : "", fi.linear ? " linear" : "");
+    }
     perf_end(PERF_TEXUP, t_up);
     return e->host;
 }

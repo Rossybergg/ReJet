@@ -431,6 +431,13 @@ static int run(void *image_base, unsigned image_size)
         }
     }
     g_log = fopen(log_path, "w");
+    { /* a game: no EcoQoS throttling, and timer requests honoured in the background too */
+        PROCESS_POWER_THROTTLING_STATE pt = {PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+                                             PROCESS_POWER_THROTTLING_EXECUTION_SPEED |
+                                                 PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
+                                             0};
+        SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &pt, sizeof pt);
+    }
     {
         SYSTEMTIME t;
         OSVERSIONINFOW os = {sizeof os};

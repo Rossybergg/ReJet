@@ -655,12 +655,11 @@ static int ready(void)
 
 #define MAX_TOASTS 4
 static CRITICAL_SECTION g_toast_lock;
-static struct { char text[96]; ULONGLONG at; } g_toasts[MAX_TOASTS];
+static struct { char text[128]; ULONGLONG at, ms; } g_toasts[MAX_TOASTS];
 static int g_ntoasts;
 
-void menu_toast(const char *fmt, ...)
+static void toast_add(ULONGLONG ms, const char *fmt, va_list ap)
 {
-    va_list ap;
     if (!g_host.dev)
         return;
     EnterCriticalSection(&g_toast_lock);
@@ -668,12 +667,61 @@ void menu_toast(const char *fmt, ...)
         memmove(g_toasts, g_toasts + 1, sizeof g_toasts[0] * (MAX_TOASTS - 1));
         g_ntoasts--;
     }
-    va_start(ap, fmt);
     vsnprintf(g_toasts[g_ntoasts].text, sizeof g_toasts[0].text, fmt, ap);
-    va_end(ap);
     g_toasts[g_ntoasts].at = GetTickCount64();
+    g_toasts[g_ntoasts].ms = ms;
     g_ntoasts++;
     LeaveCriticalSection(&g_toast_lock);
+}
+
+void menu_toast(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    toast_add(3000, fmt, ap);
+    va_end(ap);
+}
+
+/* A toast shown for `ms` milliseconds (the start-up hint: long enough to read). */
+static void toast_for(ULONGLONG ms, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    toast_add(ms, fmt, ap);
+    va_end(ap);
+}
+
+/* Toast text with controller buttons: "[A]", "[Start]", "[Back]", "[LB]" etc. are drawn as
+ * button icons `h` tall. Returns the width; draws only when `draw` is set. */
+static float rich_text(float x, float y, float h, const char *s, int draw)
+{
+    static const char *const names[] = {"A", "B", "X", "Y", "LB", "RB", "LT", "RT", "Start", "Back", "D-pad"};
+    float x0 = x;
+    char seg[128];
+    while (*s) {
+        const char *open = strchr(s, '['), *close = open ? strchr(open, ']') : NULL;
+        int b = -1;
+        size_t n;
+        if (open && close)
+            for (int i = 0; i < (int)(sizeof names / sizeof names[0]); i++)
+                if (strlen(names[i]) == (size_t)(close - open - 1) && !strncmp(open + 1, names[i], close - open - 1))
+                    b = i;
+        n = b >= 0 ? (size_t)(open - s) : open && close ? (size_t)(close + 1 - s) : strlen(s);
+        if (n >= sizeof seg)
+            n = sizeof seg - 1;
+        memcpy(seg, s, n);
+        seg[n] = 0;
+        if (draw)
+            text(FONT_SMALL, x, y, 0, C_WHITE, seg);
+        x += text_width(FONT_SMALL, seg);
+        s += n;
+        if (b >= 0) {
+            float fh = g_font_px[FONT_SMALL] / g_scale;
+            x += draw ? button_icon(b, x, y + (fh - h) / 2, h) : button_width(b, h);
+            s = close + 1;
+        }
+    }
+    return x - x0;
 }
 
 static void draw_toasts(void)
@@ -681,19 +729,20 @@ static void draw_toasts(void)
     ULONGLONG now = GetTickCount64();
     float y = g_settings.show_fps ? 70.0f : 24.0f;
     EnterCriticalSection(&g_toast_lock);
-    while (g_ntoasts && now - g_toasts[0].at > 3000) {
+    while (g_ntoasts && now - g_toasts[0].at > g_toasts[0].ms) {
         memmove(g_toasts, g_toasts + 1, sizeof g_toasts[0] * (MAX_TOASTS - 1));
         g_ntoasts--;
     }
     for (int i = 0; i < g_ntoasts; i++) {
-        float age = (float)(now - g_toasts[i].at), a = age < 150 ? age / 150 : age > 2500 ? (3000 - age) / 500 : 1;
-        float w = text_width(FONT_SMALL, g_toasts[i].text);
+        float age = (float)(now - g_toasts[i].at), end = (float)g_toasts[i].ms;
+        float a = age < 150 ? age / 150 : age > end - 500 ? (end - age) / 500 : 1;
+        float w = rich_text(0, 0, 30, g_toasts[i].text, 0);
         float dx = -(w + 120) * (1 - ease_out(age / 260)); /* slides in from the left */
         float saved = g_fade;
         g_fade = a;
         box(24 + dx, y, 24 + dx + w + 44, y + 40, 10, C_PANEL);
         box(24 + dx, y, 32 + dx, y + 40, 10, C_LIME);
-        text(FONT_SMALL, 46 + dx, y + 6, 0, C_WHITE, g_toasts[i].text);
+        rich_text(46 + dx, y + 6, 30, g_toasts[i].text, 1);
         g_fade = saved;
         y += 48 * (age < 200 ? ease_out(age / 200) : 1);
     }
@@ -1545,7 +1594,10 @@ static void draw_splash(unsigned long frame_draws)
         o *= 1 - ease_out(progress(g_splash_end, 500));
         if (progress(g_splash_end, 500) >= 1) {
             g_splash_done = 1;
-            menu_toast("ReJet %s  -  menu: F1, or Back + Start on a controller", REJET_VERSION);
+            if (pad_connected())
+                toast_for(8000, "ReJet %s   -   Menu:  [Back] + [Start]   or   F1", REJET_VERSION);
+            else
+                toast_for(8000, "ReJet %s   -   Menu:  F1   (or Back + Start on a controller)", REJET_VERSION);
             return;
         }
     }

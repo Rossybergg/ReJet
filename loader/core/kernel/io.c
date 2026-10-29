@@ -367,7 +367,10 @@ static NTSTATUS xbox_open(PHANDLE FileHandle, ACCESS_MASK DesiredAccess, PXOBJEC
             KTRACE("%s('%s') denied: disc is read-only\n", api, xpath);
             return STATUS_ACCESS_DENIED_X;
         }
-        { /* asset overrides: overrides\<path on disc> wins if present */
+        static int has_overrides = -1; /* checked once: most installs have no overrides folder */
+        if (has_overrides < 0)
+            has_overrides = GetFileAttributesW(g_override_dir) != INVALID_FILE_ATTRIBUTES;
+        if (has_overrides) { /* asset overrides: overrides\<path on disc> wins if present */
             WCHAR ov[MAX_PATH * 2];
             swprintf(ov, MAX_PATH * 2, L"%ls%ls", g_override_dir, host + wcslen(g_disc_dir));
             if (GetFileAttributesW(ov) != INVALID_FILE_ATTRIBUTES)
