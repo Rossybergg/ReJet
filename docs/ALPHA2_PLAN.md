@@ -4,7 +4,7 @@ Three goals before the next alpha: a measured, steady 60 fps; anti-aliasing and 
 
 ## Phase 1: baseline and the release gate
 
-**1a. Performance baseline (play session).**
+**1a. Performance baseline (play session). Done 10-29:** 19 stutters a minute down to about 1.4 in play (docs/PROGRESS.md).
 - Set `REJET_PERFLOG=1` and ReJet writes one row per frame to `logs\perf_<time>.csv`. Each row records:
   - the Swap-to-Swap interval;
   - work time (game plus ReJet);
@@ -21,7 +21,7 @@ Three goals before the next alpha: a measured, steady 60 fps; anti-aliasing and 
   - frame pacing itself.
 - **Frame pacing is part of "steady".** ReJet paces with its own 60 Hz timer, and the tester's display runs at 240 Hz with VSync off. So "60 fps" can still tear or judder, because each frame doesn't land on the same display refresh. Phase 2 aligns presentation to the display refresh. The baseline measures the problem first.
 
-**1b. The release gate.** These must pass before any build goes to testers. Each check exists to catch a regression we have actually had, or one that would be expensive to miss. No checks for coverage's sake.
+**1b. The release gate. Done 10-29:** `tools/release_check.py`, run by `make_release.py`; what it covers and its limits are in `tests/README.md`. Not done yet: screenshot comparison (needs a check that the scripted run is repeatable) and known-answer tests of the shader translators on recorded programs (game-derived, so local only). The plan as written: these must pass before any build goes to testers. Each check exists to catch a regression we have actually had, or one that would be expensive to miss. No checks for coverage's sake.
 
 *Automated: `python tools/release_check.py`, run by `make_release.py`. A failure blocks the release.*
 

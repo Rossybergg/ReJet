@@ -28,6 +28,7 @@
 #include "kernel.h"
 #include "perf.h"
 #include "psh.h"
+#include "widescreen.h"
 #include "settings.h"
 #include "tex.h"
 #include "ui/menu.h"
@@ -1611,7 +1612,7 @@ static SetProjectionFn g_orig_set_projection;
 
 static float widescreen_k(void)
 {
-    return ((float)g_hw / (float)g_hh) / (4.0f / 3.0f);
+    return ws_k(g_hw, g_hh);
 }
 
 static void XBAPI hook_set_projection(void *self, int fov, float zn, float zf)
@@ -1624,12 +1625,7 @@ static void XBAPI hook_set_projection(void *self, int fov, float zn, float zf)
             log_printf("widescreen: culling planes for fov %X: %.4f %.4f %.4f %.4f\n", fov, (double)planes[0],
                        (double)planes[1], (double)planes[2], (double)planes[3]);
     }
-    if (k > 1.01f) {
-        float t = planes[3] * k; /* tan of the wider half angle; the other term is 1 / cos */
-        planes[0] = planes[2] = sqrtf(1.0f + t * t);
-        planes[1] = -t;
-        planes[3] = t;
-    }
+    ws_widen_planes(planes, k);
 }
 
 static void widescreen_install(void)
@@ -1652,15 +1648,9 @@ static D3DMATRIX *g_proj; /* the game's projection matrix (its memory), re-patch
 
 static void widescreen_projection(D3DMATRIX *m)
 {
-    static float original, patched;
-    float k = widescreen_k();
+    static WsProjection st;
     g_proj = m;
-    if (m->_34 == 0.0f || m->_44 != 0.0f) /* not a perspective projection */
-        return;
-    if (m->_11 != patched || patched == 0.0f)
-        original = m->_11;
-    m->_11 = original / k;
-    patched = m->_11;
+    ws_patch_projection(&st, m, widescreen_k());
 }
 
 static HRESULT XBAPI hle_D3DDevice_SetTransform(DWORD State, const D3DMATRIX *pMatrix)

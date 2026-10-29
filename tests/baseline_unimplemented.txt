@@ -1,0 +1,11 @@
+# D3D functions and render states ReJet doesn't implement yet that the scripted route and the
+# play sessions so far reach (names as logged). tools/release_check.py fails on any name not
+# listed here: a new code path reached something ReJet ignores, so check it before adding it.
+# Remove a name when it is implemented.
+GetGammaRamp
+SetGammaRamp
+GetTile
+SetTile
+SetRenderState_EdgeAntiAlias
+SetRenderState_LineWidth
+SetRenderState_VertexBlend

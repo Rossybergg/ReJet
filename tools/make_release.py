@@ -1,12 +1,14 @@
 """Build a ReJet release package for testers: dist/ReJet-<version>/ and dist/ReJet-<version>.zip.
 
-    python tools/make_release.py [--allow-dirty]
+    python tools/make_release.py [--allow-dirty] [--skip-check]
 
 The version comes from the VERSION file (semantic: MAJOR.MINOR.PATCH; bump it before every
 release). Releases are built from a clean, committed tree so the build string
 (<version>+<commit>, shown in the ReJet menu and in every log and capture) identifies the exact
 code; --allow-dirty is for trying the packaging only. The package holds ReJet.exe,
 rejet.dll, a player readme and the GPL-3.0 licence; never game files (the script refuses anything else).
+The release gate (tools/release_check.py: unit tests, a scripted run against this machine's
+performance baseline) must pass first; --skip-check is for trying the packaging only.
 """
 import hashlib
 import shutil
@@ -30,7 +32,11 @@ def main():
     if git("status", "--porcelain", "--untracked-files=no") and not allow_dirty:
         sys.exit("The working tree has uncommitted changes: commit first (or --allow-dirty to test packaging).")
 
-    subprocess.run(["cmd", "/c", str(ROOT / "tools" / "loader" / "build.bat")], cwd=ROOT, check=True)
+    if "--skip-check" in sys.argv:
+        print("Skipping the release check: this package is for trying the packaging, not for testers.")
+        subprocess.run(["cmd", "/c", str(ROOT / "tools" / "loader" / "build.bat")], cwd=ROOT, check=True)
+    elif subprocess.run([sys.executable, "-I", str(ROOT / "tools" / "release_check.py")], cwd=ROOT).returncode:
+        sys.exit("The release check failed: fix it before packaging (tools/release_check.py).")
     build = (ROOT / "loader" / "core" / "version.gen.h").read_text(encoding="utf-8")
     build = build.split('#define REJET_BUILD "')[1].split('"')[0]
     if not build.startswith(version + "+"):

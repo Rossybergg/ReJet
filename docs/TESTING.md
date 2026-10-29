@@ -38,6 +38,17 @@ Parked problems are listed in [KNOWN_BUGS.md](KNOWN_BUGS.md).
 - `loader.log` is the current session. When a new session starts, the previous one is moved to `logs\loader_<date>_<time>.log`, so nothing is lost between sessions.
 - If the game stops, the reason is at the end of the log (`stop:` and an `EXCEPTION` or `KERNEL` line with a backtrace).
 
+## Before a release: the manual checklist
+
+`python tools/release_check.py` covers crashes, regressions in the tested code, newly reached unimplemented functions and performance (tests/README.md). These need a person, about 15 minutes:
+
+1. **First run:** copy ReJet.exe and rejet.dll into an empty folder, run it, and set up from a disc image. The progress bar finishes and the game starts.
+2. **Controller and keyboard:** open the ReJet menu with Back + Start and with F1; move through every page with each.
+3. **Display:** change the internal resolution, the aspect and full screen from the menu while playing. The picture is right after each change, with no stretching and the HUD in place.
+4. **Play for 10 minutes** with `REJET_PERFLOG=1`: the Garage, a street stage, a cutscene, the map, spraying graffiti. Nothing looks wrong (the known bugs aside), and `python tools/perf_report.py` shows no new stutters.
+5. **Sound:** music, effects and voices play; the menu's volume works.
+6. **The build string** in the menu (bottom right) matches the release.
+
 ## Switches for scripted runs (developers)
 
 Set as environment variables before starting `ReJet.exe`:

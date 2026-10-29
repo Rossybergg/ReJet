@@ -44,3 +44,6 @@ loader/core/version.gen.h
 
 # The logo as originally supplied (the copy that is used: loader/res/rejet_logo.png)
 /ReJet Logo.png
+
+# Release check: this machine's performance baseline and other local test data
+/tests/local/

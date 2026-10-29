@@ -20,6 +20,8 @@ add_library(rejet SHARED
   core/perf.c
   core/profile.c
   core/settings.c
+  core/iso.c
+  core/widescreen.c
   core/fs_patches.gen.c
   core/kernel_imports.gen.c
   core/kernel/common.c
@@ -36,6 +38,7 @@ add_library(rejet SHARED
   core/d3d/psh.c
   core/d3d/shadercache.c
   core/d3d/tex.c
+  core/d3d/texconv.c
   core/d3d/vsh.c
   core/input/xpp.c
   core/audio/dsound.c
@@ -59,3 +62,20 @@ target_link_libraries(ReJetLoader PRIVATE rejet kernel32)
 target_link_options(ReJetLoader PRIVATE
   /NODEFAULTLIB /ENTRY:start /SUBSYSTEM:WINDOWS
   /BASE:0x10000 /FIXED /DYNAMICBASE:NO /SAFESEH:NO /LARGEADDRESSAWARE)
+
+# rejet_tests.exe: unit tests of the pure parts (tests/README.md), built with the loader and run
+# by tools/release_check.py. Same compiler flags as rejet.dll.
+add_executable(rejet_tests
+  ../tests/main.c
+  ../tests/test_texconv.c
+  ../tests/test_psh.c
+  ../tests/test_widescreen.c
+  ../tests/test_iso.c
+  ../tests/test_settings.c
+  core/d3d/texconv.c
+  core/d3d/psh.c
+  core/widescreen.c
+  core/iso.c
+  core/settings.c)
+target_include_directories(rejet_tests PRIVATE core ../tests ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_compile_options(rejet_tests PRIVATE /W4 /arch:IA32)
