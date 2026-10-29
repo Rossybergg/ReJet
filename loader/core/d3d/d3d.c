@@ -27,14 +27,15 @@
 
 #include "hle.h"
 #include "kernel.h"
+#include "memdump.h"
 #include "perf.h"
 #include "psh.h"
-#include "widescreen.h"
 #include "settings.h"
 #include "tex.h"
 #include "ui/menu.h"
 #include "version.gen.h"
 #include "vsh.h"
+#include "widescreen.h"
 #include "xbox/xbox_d3d.h"
 #include "xboxkrnl_impl.h"
 #include "xdk_addrs.gen.h"
@@ -813,6 +814,7 @@ static void testing_hotkeys(void)
         log_printf("==================== MARK %ld at frame %lu ====================\n", marks_done, g_frame);
         menu_toast("Marker %ld written to the log", marks_done);
         perf_mark(marks_done);
+        memdump_mark(marks_done);
     }
     if (g_capture_log && g_frame == g_capture_frame) { /* the captured frame just ended */
         capture_finish();
@@ -2279,6 +2281,7 @@ static HRESULT XBAPI hle_D3DDevice_SetStreamSource(UINT Stream, XD3DResource *pS
 static DWORD g_dl_prim, g_dl_count;
 static const BYTE *g_dl_verts; /* a small draw-up's vertices, dumped into captures */
 static UINT g_dl_stride;
+static DWORD g_dl_callers[8]; /* the game functions behind this draw (find_game_callers) */
 
 static void draw_log(void)
 {
@@ -2341,6 +2344,14 @@ static void draw_log(void)
                     fprintf(g_capture_log, "      c%u: %g %g %g %g\n", r, g_vconst[r][0], g_vconst[r][1],
                             g_vconst[r][2], g_vconst[r][3]);
             }
+        }
+        if (g_textures[0] && tex_name(g_textures[0]))
+            fprintf(g_capture_log, "      t0 name %016llX\n", tex_name(g_textures[0]));
+        if (g_dl_callers[0]) {
+            fprintf(g_capture_log, "      game callers:");
+            for (int k = 0; k < 8 && g_dl_callers[k]; k++)
+                fprintf(g_capture_log, " %08lX", g_dl_callers[k]);
+            fputc('\n', g_capture_log);
         }
         if (g_dl_verts) /* raw vertices: all of small draws, the first 8 of others */
             for (DWORD v = 0; v < g_dl_count && v < 8; v++) {
@@ -2815,6 +2826,28 @@ static const BYTE *inset_quad_texcoords(const BYTE *verts, UINT first, UINT last
 }
 
 /* Draw `count` vertices from `verts` (optionally indexed by 16-bit `idx`). */
+/* The game functions behind a draw: return addresses into game code (0x11000-0x13B010) found on
+ * the stack, each just after a CALL (the game has no frame pointers to walk). For captures. */
+
+static int after_call(DWORD a)
+{
+    const BYTE *p = (const BYTE *)(UINT_PTR)a;
+    return p[-5] == 0xE8 || (p[-2] == 0xFF && (p[-1] & 0x38) == 0x10) ||
+           (p[-3] == 0xFF && (p[-2] & 0x38) == 0x10) || (p[-6] == 0xFF && (p[-5] & 0x38) == 0x10);
+}
+
+static void find_game_callers(const void *frame)
+{
+    const DWORD *sp = (const DWORD *)frame;
+    unsigned n = 0;
+    memset(g_dl_callers, 0, sizeof g_dl_callers);
+    for (unsigned i = 0; i < 2048 && n < 8; i++) {
+        DWORD v = sp[i];
+        if (v >= 0x11005 && v < 0x13B010 && after_call(v) && (n == 0 || g_dl_callers[n - 1] != v))
+            g_dl_callers[n++] = v;
+    }
+}
+
 static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, const WORD *idx)
 {
     D3DPRIMITIVETYPE pt;
@@ -2825,6 +2858,8 @@ static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, con
     LONGLONG t0 = perf_now();
     g_dl_prim = xprim;
     g_dl_count = count;
+    if (g_capture_log && g_frame == g_capture_frame)
+        find_game_callers(_AddressOfReturnAddress());
     if (stride <= 64) { /* captures list the first vertices (in buffer order) */
         g_dl_verts = verts;
         g_dl_stride = stride;

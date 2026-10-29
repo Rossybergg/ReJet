@@ -15,3 +15,7 @@ int tex_is_depth(const XD3DPixelContainer *x);
 
 /* Call once per presented frame: texture contents are re-checked at most once per frame. */
 void tex_new_frame(void);
+
+/* The texture's content name (sample_hash, as for HD replacements) from its last upload; 0 if
+ * it hasn't been used yet. Recognises specific images, such as the graffiti warning. */
+unsigned long long tex_name(const XD3DPixelContainer *x);

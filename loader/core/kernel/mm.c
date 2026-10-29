@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "kernel.h"
+#include "memdump.h"
 #include "xboxkrnl_impl.h"
 
 #define XBOX_MEM_NOZERO 0x00800000 /* Xbox-only allocation flag */
@@ -33,6 +34,8 @@ NTSTATUS XBAPI xbox_NtAllocateVirtualMemory(PVOID *BaseAddress, ULONG_PTR ZeroBi
         UINT_PTR end = ((UINT_PTR)(*BaseAddress ? *BaseAddress : p) + *AllocationSize + 0xFFF) & ~(UINT_PTR)0xFFF;
         *BaseAddress = (PVOID)start;
         *AllocationSize = end - start;
+        if (AllocationType & MEM_COMMIT)
+            memdump_note(*BaseAddress, *AllocationSize);
     }
     return STATUS_SUCCESS;
 }
@@ -61,6 +64,7 @@ PVOID XBAPI xbox_MmAllocateContiguousMemoryEx(ULONG NumberOfBytes, ULONG_PTR Low
 {
     /* VirtualAlloc returns 64 KB-aligned blocks, enough for any Xbox alignment request. */
     PVOID p = VirtualAlloc(NULL, NumberOfBytes, MEM_RESERVE | MEM_COMMIT, host_protect(ProtectionType));
+    memdump_note(p, NumberOfBytes);
     KTRACE("MmAllocateContiguousMemoryEx(%lu, %08lX-%08lX, align %lu) -> %08X\n", NumberOfBytes,
            (unsigned long)LowestAcceptableAddress, (unsigned long)HighestAcceptableAddress, Alignment,
            (unsigned)(UINT_PTR)p);
@@ -143,13 +147,17 @@ NTSTATUS XBAPI xbox_MmQueryStatistics(PXMM_STATISTICS MemoryStatistics)
 
 PVOID XBAPI xbox_ExAllocatePoolWithTag(SIZE_T NumberOfBytes, ULONG Tag)
 {
+    PVOID p = HeapAlloc(GetProcessHeap(), 0, NumberOfBytes);
     (void)Tag;
-    return HeapAlloc(GetProcessHeap(), 0, NumberOfBytes);
+    memdump_note(p, NumberOfBytes);
+    return p;
 }
 
 PVOID XBAPI xbox_ExAllocatePool(SIZE_T NumberOfBytes)
 {
-    return HeapAlloc(GetProcessHeap(), 0, NumberOfBytes);
+    PVOID p = HeapAlloc(GetProcessHeap(), 0, NumberOfBytes);
+    memdump_note(p, NumberOfBytes);
+    return p;
 }
 
 VOID XBAPI xbox_ExFreePool(PVOID P)

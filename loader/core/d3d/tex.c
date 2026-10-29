@@ -41,6 +41,16 @@ static unsigned g_count;
 static unsigned short g_slot[SLOTS]; /* entry index + 1, 0 = empty */
 static unsigned long g_tex_frame = 1;
 
+static unsigned slot_of(const XD3DPixelContainer *x);
+
+unsigned long long tex_name(const XD3DPixelContainer *x)
+{
+    unsigned k = slot_of(x);
+    while (g_slot[k] && g_tex[g_slot[k] - 1].x != x)
+        k = (k + 1) % SLOTS;
+    return g_slot[k] && g_tex[g_slot[k] - 1].x == x ? g_tex[g_slot[k] - 1].hash : 0;
+}
+
 void tex_new_frame(void)
 {
     g_tex_frame++;

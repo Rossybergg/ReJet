@@ -21,6 +21,7 @@ add_library(rejet SHARED
   core/profile.c
   core/settings.c
   core/iso.c
+  core/memdump.c
   core/widescreen.c
   core/fs_patches.gen.c
   core/kernel_imports.gen.c
