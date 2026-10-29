@@ -50,6 +50,7 @@ Your saves and settings are kept between sessions.
 | Triggers | LT / RT | Q / E |
 | Start / Back | Start / Back | Enter / Backspace |
 | **ReJet menu** | **Back + Start** | **F1** |
+| Full screen on or off | | Alt + Enter |
 
 ## The ReJet menu
 

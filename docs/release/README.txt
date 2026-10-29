@@ -19,6 +19,7 @@ FIRST START
 PLAYING
 
   ReJet menu (pause, settings, bug reports)   F1, or Back + Start on a controller
+  Full screen on or off                        Alt + Enter
   Move                                         left stick / W A S D
   Jump                                         A / Space or Z
   Boost, spray                                 B / X

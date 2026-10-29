@@ -274,3 +274,6 @@ Plan for the next alpha in `docs/ALPHA2_PLAN.md` (baseline and release gate, the
 - **Now** (`pacing_sync` in d3d.c): twice a second ReJet reads the compositor's refresh period and last vblank (`DwmGetCompositionTimingInfo`). When the refresh is a whole multiple of 60 Hz (within 0.3 Hz), the vblank grid runs at the display's rate (every k-th refresh) and in its phase, each frame due half a refresh before a display vblank; the phase is nudged at most 0.2 ms a frame, and a new period keeps the vblank count continuous (the game and CRI ADX count vblanks). The grid is now fractional (`g_vb_start`, `g_vb_period`). Other rates (144, 165 Hz) keep the 60 Hz grid. `REJET_PACING=60` forces it.
 - **Checked** on the development PC's 240 Hz display: locks at once ("239.987 Hz, every 4 refreshes"), phase error about 0.002 ms after a minute. No cost: the same build with pacing off and on measured the same (median work 5.01 ms both). The phase within the refresh made no measurable difference either (0.1, 0.5 and 0.9 of a refresh tried). Not yet checked on a 60 Hz display, or for audio over a long session at 59.94 Hz.
 
+### 2026-10-29 — Alpha 2, phase 2: Alt+Enter
+
+- **Alt+Enter** switches full screen (borderless) on and off from the keyboard, saved like the menu's setting; the game no longer sees that Enter as Start.

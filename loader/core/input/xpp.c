@@ -75,7 +75,7 @@ static void read_keyboard(XB_GAMEPAD *g)
     if (!keyboard_active())
         return;
     g->wButtons = (WORD)((key(VK_UP) ? 1 : 0) | (key(VK_DOWN) ? 2 : 0) | (key(VK_LEFT) ? 4 : 0) |
-                         (key(VK_RIGHT) ? 8 : 0) | (key(VK_RETURN) ? 0x10 : 0) | (key(VK_BACK) ? 0x20 : 0));
+                         (key(VK_RIGHT) ? 8 : 0) | (key(VK_RETURN) && !key(VK_MENU) ? 0x10 : 0) /* not Alt+Enter: full screen */ | (key(VK_BACK) ? 0x20 : 0));
     g->bAnalogButtons[0] = (key(VK_SPACE) || key('Z')) ? 255 : 0;
     g->bAnalogButtons[1] = (key('X') || key(VK_ESCAPE)) ? 255 : 0;
     g->bAnalogButtons[2] = key('C') ? 255 : 0;

@@ -83,6 +83,7 @@ static CRITICAL_SECTION g_capture_note_lock;
 
 static void present(void);
 static void change_display(void);
+static void apply_window(void);
 static void widescreen_install(void);
 static D3DPRESENT_PARAMETERS g_hp; /* the device's present parameters (for ResetEx) */
 static void request_capture(const char *note);
@@ -115,6 +116,17 @@ static LRESULT CALLBACK wnd_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         InterlockedExchange(&g_capture_request, 1);
         return 0;
     }
+    if (m == WM_SYSKEYDOWN && wp == VK_RETURN && (lp & (1 << 29))) { /* Alt+Enter: full screen on or off */
+        if (!(lp & (1 << 30))) { /* not a key repeat */
+            g_settings.fullscreen = !g_settings.fullscreen;
+            settings_save();
+            apply_window(); /* this thread owns the window */
+            log_printf("d3d: Alt+Enter: %s\n", g_settings.fullscreen ? "full screen" : "window");
+        }
+        return 0;
+    }
+    if (m == WM_SYSCHAR && wp == VK_RETURN) /* no beep for Alt+Enter */
+        return 0;
     if ((m == WM_KEYDOWN || m == WM_SYSKEYDOWN) && wp == VK_F10) { /* F10 comes as a system key */
         InterlockedIncrement(&g_mark_request);
         return 0;
