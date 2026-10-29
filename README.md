@@ -72,7 +72,7 @@ Press **F1**, or **Back and Start together** on a controller, at any time. The g
 
 ## What's planned
 
-- **HUD at the screen edges in widescreen** (it currently stays in the middle 4:3 area).
+- **A sharper, widescreen-aware HUD** (the game's HUD stays in the middle 4:3 area for now).
 - **Right-stick camera control** and **button remapping**.
 - **Your own music**: the Xbox let Jet Set Radio Future play songs from its hard drive, and ReJet could map that to a folder on your PC.
 - **Skipping the intro logos**, and controller rumble on/off.

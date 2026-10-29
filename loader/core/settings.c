@@ -8,7 +8,7 @@
 #include "settings.h"
 
 Settings g_settings = {
-    1280, 960, 960, ASPECT_4_3, 0, 0, 1, 0, 1, /* display (host vsync off: the emulated vblank paces the game) */
+    1280, 960, 960, ASPECT_4_3, 0, 0, 1, 0, 1, 0, /* display (host vsync off: the emulated vblank paces the game) */
     100, 0,                     /* audio */
     GAME_LANG_ENGLISH,          /* console */
 };
@@ -55,6 +55,7 @@ void settings_load(void)
     GET("Display", "Anisotropy", anisotropy, 1, 16);
     GET("Display", "ShowFPS", show_fps, 0, 1);
     GET("Display", "Antialiasing", antialiasing, 1, 8);
+    GET("Display", "HudEdges", hud_edges, 0, 1);
     GET("Audio", "Volume", volume, 0, 100);
     GET("Audio", "MuteInBackground", mute_in_background, 0, 1);
     GET("Console", "Language", language, GAME_LANG_JAPANESE, GAME_LANG_ITALIAN);
@@ -83,6 +84,7 @@ void settings_save(void)
     PUT("Display", "Anisotropy", anisotropy);
     PUT("Display", "ShowFPS", show_fps);
     PUT("Display", "Antialiasing", antialiasing);
+    PUT("Display", "HudEdges", hud_edges);
     PUT("Audio", "Volume", volume);
     PUT("Audio", "MuteInBackground", mute_in_background);
     PUT("Console", "Language", language);

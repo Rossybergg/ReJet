@@ -6,7 +6,7 @@
 
 #define VSH_C_SCREEN  192 /* (2/RTwidth, -2/RTheight, 1, 1) */
 #define VSH_C_TEXSCALE 193 /* 193..196: per-stage texcoord scale */
-#define VSH_C_2D 197      /* (x scale for 2D programs, 1, 1, 1): keeps 2D at 4:3 in widescreen */
+#define VSH_C_2D 197      /* (2D x scale, 2D pivot 0 centre / 1 right edge, 3D HUD x shift, 1): widescreen placement */
 
 /* After vsh_compile/vsh_to_hlsl: nonzero if that program is 2D (gives screen positions itself,
  * without the viewport-constant epilogue of 3D programs). */

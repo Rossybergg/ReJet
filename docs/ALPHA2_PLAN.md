@@ -65,7 +65,7 @@ In order of value:
    - Use a flip-model swap chain, a waitable swap or DWM timing, with low latency and no tearing.
    - This is what makes 60 fps look steady, not just measure steady.
 4. **Borderless full screen** as the default full-screen mode (instant Alt+Tab, plays well with overlays), with exclusive full screen as an option. Plus Alt+Enter.
-5. **HUD at the screen edges in widescreen.** Already on the backlog, and it's a presentation feature.
+5. **HUD at the screen edges in widescreen. Parked 10-29** (docs/ENHANCEMENTS.md): moving the game's own HUD needed a special case for each way it is drawn; ReJet drawing its own HUD is the better path (a later proof of concept). Already on the backlog, and it's a presentation feature.
 
 Considered and left out: post-process AA (FXAA/SMAA) blurs the flat cel-shaded colours and the 2D art, which MSAA handles better; HDR and sharpening filters don't suit the art style.
 

@@ -303,12 +303,15 @@ int vsh_to_hlsl(const DWORD *program, const DWORD *decl, char *hlsl, size_t cap)
     }
 
     /* Epilogue: screen space (pixels) -> D3D9 clip space. 2D programs (no viewport constant)
-     * are squeezed horizontally by c[197].x so they keep 4:3 proportions in widescreen. */
+     * are squeezed horizontally by c[197].x so they keep 4:3 proportions in widescreen: around
+     * the centre (c[197].y = 0), or around the right edge for the right side's HUD (1); 3D
+     * programs drawing the HUD icon by the can count are shifted right by c[197].z. */
     emit(&o, "    VOut o;\n"
              "    float w = (opos.w == 0) ? 1 : opos.w;\n"
              "    float2 ndc = float2(opos.x * c[192].x - 1, opos.y * c[192].y + 1);\n"
              "%s",
-         g_reads_viewport ? "" : "    ndc.x *= c[197].x; // 2D program\n");
+         g_reads_viewport ? "    if (ndc.x > 0) ndc.x += c[197].z; // 3D HUD pieces: as far right as the 2D HUD\n"
+                          : "    ndc.x = (ndc.x - c[197].y) * c[197].x + c[197].y; // 2D program: pivot 0 or 1\n");
     emit(&o, 
              "    o.pos = float4(ndc * w, opos.z * w, w);\n"
              "    o.d0 = saturate(od0); o.d1 = saturate(od1); o.fog = ofog.x; o.pts = opts.x;\n"
