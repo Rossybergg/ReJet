@@ -54,7 +54,7 @@ Your saves and settings are kept between sessions.
 
 ## The ReJet menu
 
-Press **F1**, or **Back and Start together** on a controller, at any time. The game pauses and the ReJet menu slides in. It works with a controller (with proper button icons) or the keyboard, and everything you change is saved straight away.
+Press **F1**, or **Back and Start together** on a controller, at any time. The game pauses and the ReJet menu slides in, styled after the game's own Garage screens, with a small picture of the paused game beside it. It works with a controller (with proper button icons) or the keyboard, and everything you change is saved straight away.
 
 ## What's new compared with the Xbox
 

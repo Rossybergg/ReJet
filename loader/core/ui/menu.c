@@ -252,9 +252,10 @@ static void scale_logo(DWORD *dst, UINT w, UINT h, UINT pitch)
 static int build_atlas(UINT bw, UINT bh)
 {
     static const struct { const WCHAR *face; int size, weight, italic; } fonts[FONT_COUNT] = {
-        {L"Arial Black", 76, FW_HEAVY, 1},
-        {L"Arial Black", 34, FW_HEAVY, 1},
-        {L"Segoe UI", 24, FW_BOLD, 0},
+        /* Bahnschrift: Windows' own condensed DIN face (Windows 10 and later), nothing to ship */
+        {L"Bahnschrift", 64, FW_BOLD, 0},
+        {L"Bahnschrift SemiBold Condensed", 34, FW_NORMAL, 0},
+        {L"Bahnschrift", 24, FW_NORMAL, 0},
     };
     HDC dc = CreateCompatibleDC(NULL);
     BITMAPINFO bi;
@@ -472,15 +473,17 @@ static float text_width(int font, const char *s)
     return w / g_scale; /* canvas units */
 }
 
-/* Text on the canvas at (x, y) = top left; align 0 left, 1 centre, 2 right. Drop shadow. */
+/* Text on the canvas at (x, y) = top left; align 0 left, 1 centre, 2 right. Light text gets a
+ * drop shadow; dark text (ink on the yellow field) none, where it would only smear the letters. */
 static void text(int font, float x, float y, int align, DWORD c, const char *s)
 {
     float px, py = Y(y), w = text_width(font, s);
+    int light = ((c >> 16 & 0xFF) * 3 + (c >> 8 & 0xFF) * 6 + (c & 0xFF)) / 10 > 128;
     if (align == 1)
         x -= w * 0.5f;
     else if (align == 2)
         x -= w;
-    for (int pass = 0; pass < 2; pass++) {
+    for (int pass = light ? 0 : 1; pass < 2; pass++) {
         DWORD col = pass ? with_alpha(c, g_fade) : with_alpha(0xC0000000u, (float)(c >> 24) / 255.0f * g_fade);
         float off = pass ? 0.0f : (font == FONT_SMALL ? 1.0f : 2.5f) * g_scale;
         px = X(x);
@@ -1294,18 +1297,16 @@ static IDirect3DTexture9 *g_frozen; /* the last game frame, behind the menu */
 /* How open the menu is, 0..1 (opening, then closing). */
 static float openness(void)
 {
-    float o = ease_out(progress(g_t_open, 280));
+    float o = ease_out(progress(g_t_open, 160)); /* menus feel slow past ~150 ms (MENU_DESIGN.md) */
     if (g_closing)
-        o *= 1 - ease_out(progress(g_t_close, 180));
+        o *= 1 - ease_out(progress(g_t_close, 120));
     return o;
 }
 
-static void draw_frozen(float o)
+/* The frozen game frame as a quad (back-buffer pixels, the top edge shifted right by skew). */
+static void frozen_quad(float x0, float y0, float x1, float y1, float skew, DWORD c)
 {
-    BYTE k = (BYTE)(255 - (255 - 0x5A) * o); /* darkens as the menu opens */
-    DWORD c = 0xFF000000u | (DWORD)k << 16 | (DWORD)k << 8 | k;
     Vertex v[6];
-    float w = (float)g_bw - 0.5f, h = (float)g_bh - 0.5f;
     IDirect3DSurface9 *bb = NULL, *old_rt = NULL;
     if (!g_frozen)
         return;
@@ -1316,11 +1317,11 @@ static void draw_frozen(float o)
     IDirect3DDevice9Ex_GetRenderTarget(DEV, 0, &old_rt);
     IDirect3DDevice9Ex_GetBackBuffer(DEV, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb);
     IDirect3DDevice9Ex_SetRenderTarget(DEV, 0, bb);
-    v[0] = (Vertex){-0.5f, -0.5f, 0, 1, c, 0, 0};
-    v[1] = (Vertex){w, -0.5f, 0, 1, c, 1, 0};
-    v[2] = (Vertex){-0.5f, h, 0, 1, c, 0, 1};
+    v[0] = (Vertex){x0 + skew, y0, 0, 1, c, 0, 0};
+    v[1] = (Vertex){x1 + skew, y0, 0, 1, c, 1, 0};
+    v[2] = (Vertex){x0, y1, 0, 1, c, 0, 1};
     v[3] = v[1];
-    v[4] = (Vertex){w, h, 0, 1, c, 1, 1};
+    v[4] = (Vertex){x1, y1, 0, 1, c, 1, 1};
     v[5] = v[2];
     IDirect3DDevice9Ex_SetTexture(DEV, 0, (IDirect3DBaseTexture9 *)g_frozen);
     IDirect3DDevice9Ex_SetFVF(DEV, FVF);
@@ -1348,16 +1349,49 @@ static void draw_frozen(float o)
         IDirect3DSurface9_Release(bb);
 }
 
-/* Slow diagonal stripes drifting across the background, JSRF poster style. */
-static void draw_stripes(double t)
+/* The paused game behind the menu: it shows while the menu slides in and out. */
+static void draw_frozen(float o)
 {
-    static const DWORD col[] = {0x14C8F01Eu, 0x10FF2D8Au, 0x0E19C8C8u, 0x12C8F01Eu, 0x0CFF2D8Au};
-    for (int i = 0; i < 5; i++) {
-        float w = 90.0f + 50.0f * (float)(i % 3);
-        float span = canvas_right() - canvas_left() + 900;
-        float x = canvas_left() - 600 + (float)fmod(t * (0.025 + 0.008 * i) + i * 410.0, (double)span);
-        box(x, -10, x + w, 970, 380, col[i]);
-    }
+    BYTE k = (BYTE)(255 - (255 - 0x80) * o); /* darkens to half as the menu opens */
+    frozen_quad(-0.5f, -0.5f, (float)g_bw - 0.5f, (float)g_bh - 0.5f, 0,
+                0xFF000000u | (DWORD)k << 16 | (DWORD)k << 8 | k);
+}
+
+static float g_preview[4]; /* the preview's frame on the canvas (draw_menu), for draw_preview */
+
+/* The paused game, small, in its frame on the right; after the menu's batch. */
+static void draw_preview(void)
+{
+    BYTE a = (BYTE)(255 * openness());
+    if (g_preview[2] > g_preview[0])
+        frozen_quad(X(g_preview[0]) - 0.5f, Y(g_preview[1]) - 0.5f, X(g_preview[2]) - 0.5f, Y(g_preview[3]) - 0.5f,
+                    10 * g_scale, (DWORD)a << 24 | 0x00FFFFFFu);
+}
+
+/* Garage (docs/MENU_DESIGN.md, after the game's own Garage menu): a yellow field with orange
+ * bars, the logo with a cyan page tag, settings as rows with a black edge, the selected row
+ * lifted onto white with a black drop shadow and its value in a cyan tag, the help line on a
+ * black strip, and the button bar; a small tilted preview of the paused game sits on the right
+ * (draw_preview, after the batch). */
+#define C_FIELD  0xFFFFC21Au
+#define C_ORANGE 0xFFF39A1Eu
+#define C_CYAN   0xFF37B8C8u
+#define C_INK    0xFF111111u
+#define ROW_R    904.0f        /* the rows' right edge on the canvas */
+
+static void upper(char *dst, size_t cap, const char *s)
+{
+    size_t i = 0;
+    for (; s[i] && i + 1 < cap; i++)
+        dst[i] = (char)((s[i] >= 'a' && s[i] <= 'z') ? s[i] - 32 : s[i]);
+    dst[i] = 0;
+}
+
+/* A box with a black outline (o canvas units thick). */
+static void outlined(float x0, float y0, float x1, float y1, float o, DWORD fill)
+{
+    box(x0, y0, x1, y1, 0, C_INK);
+    box(x0 + o, y0 + o, x1 - o, y1 - o, 0, fill);
 }
 
 static void draw_menu(void)
@@ -1365,129 +1399,167 @@ static void draw_menu(void)
     int n;
     Item *items = page_items(g_page, &n);
     int sel = g_sel[g_page] < n ? g_sel[g_page] : 0;
-    float y0 = 250, row = 62;
+    float y0 = 210, row = n * 64.0f <= 600.0f ? 64.0f : 600.0f / (float)n, rh = row - 10;
     double t = now_ms();
     float o = openness(), slide = 1 - o;
-    float pg = progress(g_t_page, 160), saved_fade = g_fade;
+    float pg = progress(g_t_page, 140), saved_fade = g_fade;
     int restart_note = 0;
 
+    /* the field and the orange bars drop in */
     g_fade = o;
-    draw_stripes(t);
-
-    /* title strip: slides in from the left; the pink underline grows */
+    box(canvas_left() - 10, -10, canvas_right() + 10, 970, 0, C_FIELD);
     {
-        float dx = -(1000 - canvas_left()) * slide, tx, right;
-        /* the strip fits the logo (or "ReJet") and the longest page name */
-        tx = g_logo_px ? 64 + 76 * g_logo_aspect + 30 : 360;
-        right = tx + text_width(FONT_ITEM, "REPORT A BUG") + 60;
-        if (right < 700)
-            right = 700;
-        box(canvas_left() - 40 + dx, 70, right + dx, 190, 40, C_LIME);
-        for (int i = 0; i < 4; i++) { /* moving speed lines inside the strip */
-            float sx = 120 + (float)fmod(t * 0.12 + i * 150.0, (double)right - 140.0);
-            box(sx + dx, 78, sx + 26 + dx, 182, 40, 0x22000000u);
+        static const float bars[][2] = {{0, 30}, {48, 52}, {118, 22}, {158, 70}, {246, 26}};
+        float dy = -100 * slide;
+        for (int i = 0; i < 5; i++)
+            box(60 + bars[i][0], -10 + dy, 60 + bars[i][0] + bars[i][1], 84 + dy, 0, C_ORANGE);
+        box(canvas_right() - 300, -10 + dy, canvas_right() - 276, 84 + dy, 0, C_ORANGE);
+        box(canvas_right() - 256, -10 + dy, canvas_right() - 214, 84 + dy, 0, C_ORANGE);
+    }
+
+    /* the logo (black, as drawn) and the page's cyan tag */
+    {
+        float x = 64 - 60 * slide, lw = g_logo_px ? logo(x, 104, 72, C_WHITE) : 0;
+        if (!lw) {
+            text(FONT_TITLE, x, 104, 0, C_INK, "REJET");
+            lw = text_width(FONT_TITLE, "REJET");
         }
-        box(canvas_left() - 40 + dx, 182,
-            canvas_left() - 40 + dx + (right - 20 - canvas_left()) * ease_out(progress(g_t_open + 120, 300)), 196, 40,
-            C_PINK);
-        if (g_logo_px)
-            logo(64 + dx, 92, 76, C_WHITE); /* centred in the strip */
-        else
-            text(FONT_TITLE, 70 + dx, 82, 0, C_BLACK, "ReJet");
-        /* page name drops in on every page change */
         g_fade = o * ease_out(pg);
-        text(FONT_ITEM, tx + dx, 116 - 18 * (1 - ease_out(pg)), 0, C_BLACK, PAGE_TITLE[g_page]);
+        {
+            float tx = x + lw + 24, tw = text_width(FONT_SMALL, PAGE_TITLE[g_page]) + 32, ty = 132 - 12 * (1 - ease_out(pg));
+            box(tx, ty, tx + tw, ty + 42, -6, C_INK);
+            box(tx + 4, ty + 4, tx + tw - 4, ty + 38, -6, C_CYAN);
+            text(FONT_SMALL, tx + tw / 2 - 3, ty + 7, 1, C_INK, PAGE_TITLE[g_page]);
+        }
         g_fade = o;
     }
 
-    /* the list panel slides in from the right */
+    /* the selection glides between rows */
     {
-        float dx = 900 * slide * slide;
-        float target = (float)sel, k = 1 - (float)exp(-(1000.0 / 60.0) / 55.0);
-        box(90 + dx, y0 - 26, 1210 + dx, y0 + row * n + 14, 24, C_PANEL);
-        g_sel_pos += (target - g_sel_pos) * k; /* the selection bar glides */
+        float target = (float)sel, k = 1 - (float)exp(-(1000.0 / 60.0) / 40.0);
+        g_sel_pos += (target - g_sel_pos) * k;
         if (fabsf(target - g_sel_pos) < 0.002f)
             g_sel_pos = target;
-        {
-            float y = y0 + row * g_sel_pos, pulse = 0.88f + 0.12f * (float)sin(t * 0.006);
-            float grow = ease_back(progress(g_t_sel, 220));
-            box(110 + dx, y - 6, 110 + dx + 1080 * (0.9f + 0.1f * grow), y + row - 14, 14, with_alpha(C_LIME, pulse));
-            box(110 + dx, y - 6, 122 + dx, y + row - 14, 14, C_PINK);
+    }
+    for (int i = 0; i < n; i++) {
+        const Item *it = &items[i];
+        float rp = progress(g_t_page + 18.0 * i, 160);
+        float rx = 40 * (float)g_page_dir * (1 - ease_out(rp)) - 120 * slide, y = y0 + row * i;
+        float ty = y + (rh - 46) * 0.5f, right = ROW_R - 18 + rx;
+        int on = i == sel;
+        DWORD fg = it->type == IT_INFO || item_disabled(it) ? 0xFF6B5A20u : C_INK;
+        char label[96], val[200] = "";
+        g_fade = o * ease_out(rp);
+        if (on) { /* lifted: white with a black drop shadow */
+            float lift = 6 * ease_out(progress(g_t_sel, 120));
+            box(64 + rx + 8, y + 8 - lift, ROW_R + rx + 8, y + rh + 8 - lift, 0, C_INK);
+            outlined(64 + rx - lift, y - lift, ROW_R + rx - lift, y + rh - lift, 4, C_WHITE);
+            ty -= lift;
+            right -= lift;
         }
-        for (int i = 0; i < n; i++) {
-            const Item *it = &items[i];
-            /* rows arrive one after another, from the side the page came from */
-            float rp = progress(g_t_page + 24.0 * i, 240);
-            float rx = dx + 70 * (float)g_page_dir * (1 - ease_back(rp)), y = y0 + row * i;
-            int on = i == sel;
-            DWORD fg = on ? C_BLACK : (it->type == IT_INFO || item_disabled(it) ? C_GREY : C_WHITE);
-            char val[200] = "";
-            g_fade = o * ease_out(rp);
-            text(FONT_ITEM, 140 + rx, y, 0, fg, it->label);
-            switch (it->type) {
-            case IT_CHOICE:
-            case IT_TOGGLE:
-                snprintf(val, sizeof val, on ? "<  %s%s  >" : "%s%s", it->choices[*it->value],
-                         it->restart ? " *" : "");
-                break;
-            case IT_SLIDER: {
-                float x0 = 820 + rx, x1 = 1110 + rx, f = (float)*it->value / 100.0f;
-                box(x0, y + 14, x1, y + 30, 6, on ? 0x66000000u : 0x55FFFFFFu);
-                box(x0, y + 14, x0 + (x1 - x0) * f, y + 30, 6, on ? C_BLACK : C_TEAL);
-                snprintf(val, sizeof val, "%d", *it->value);
-                text(FONT_SMALL, 1170 + rx, y + 6, 2, fg, val);
-                val[0] = 0;
-                break;
-            }
-            case IT_TEXT:
-                snprintf(val, sizeof val, "%s%s", g_note[0] ? g_note : (on ? "" : "(optional)"),
-                         on && fmod(t, 1000.0) < 500.0 ? "_" : "");
-                break;
-            case IT_INFO:
-                snprintf(val, sizeof val, it->pad[0] ? "/   %s" : "%s", it->help);
-                break;
-            }
-            if (it->type == IT_INFO && it->pad[0]) { /* controller icons left of the keys */
-                float h = 36, ix = 1170 + rx - text_width(FONT_SMALL, val) - 14;
-                for (int b = 1; b >= 0; b--)
-                    if (it->pad[b]) {
-                        ix -= button_width(it->pad[b] - 1, h);
-                        button_icon(it->pad[b] - 1, ix, y + 2, h);
-                        ix -= 8;
-                    }
-            }
-            if (it->restart)
-                restart_note = 1;
-            if (val[0]) {
-                int font = it->type == IT_TEXT || it->type == IT_INFO ? FONT_SMALL : FONT_ITEM;
-                float maxw = it->type == IT_TEXT ? 760.0f : 600.0f, w = text_width(font, val);
-                float nudge = on ? 16.0f * (float)g_value_dir * (1 - ease_out(progress(g_t_value, 200))) : 0;
-                const char *v = val;
-                while (w > maxw && *v) /* long notes: show the end */
-                    w -= text_width(font, (char[]){*v++, 0});
-                text(font, 1170 + rx + nudge, y + (font == FONT_SMALL ? 6 : 0), 2, fg, v);
-            }
+        else {
+            box(64 + rx, y, ROW_R + rx, y + rh, 0, 0x14000000u);
+            box(64 + rx, y, 70 + rx, y + rh, 0, C_INK);
         }
-        g_fade = o;
+        upper(label, sizeof label, it->label);
+        text(FONT_ITEM, 86 + rx - (on ? 6 : 0), ty, 0, fg, label);
+        switch (it->type) {
+        case IT_CHOICE:
+        case IT_TOGGLE:
+            snprintf(val, sizeof val, "%s%s", it->choices[*it->value], it->restart ? " *" : "");
+            break;
+        case IT_SLIDER: {
+            float x0 = right - 300, x1 = right - 80, f = (float)*it->value / 100.0f;
+            outlined(x0, ty + 14, x1, ty + 34, 3, 0x66FFFFFFu);
+            box(x0 + 3, ty + 17, x0 + 3 + (x1 - x0 - 6) * f, ty + 31, 0, on ? C_CYAN : C_INK);
+            snprintf(val, sizeof val, "%d", *it->value);
+            text(FONT_ITEM, right, ty, 2, C_INK, val);
+            val[0] = 0;
+            break;
+        }
+        case IT_TEXT:
+            snprintf(val, sizeof val, "%s%s", g_note[0] ? g_note : (on ? "" : "(optional)"),
+                     on && fmod(t, 1000.0) < 500.0 ? "_" : "");
+            break;
+        case IT_INFO:
+            snprintf(val, sizeof val, it->pad[0] ? "/   %s" : "%s", it->help);
+            break;
+        default:
+            if (on)
+                snprintf(val, sizeof val, ">");
+            break;
+        }
+        if (it->type == IT_INFO && it->pad[0]) { /* controller icons left of the keys */
+            float h = 34, ix = right - text_width(FONT_SMALL, val) - 14;
+            for (int b = 1; b >= 0; b--)
+                if (it->pad[b]) {
+                    ix -= button_width(it->pad[b] - 1, h);
+                    button_icon(it->pad[b] - 1, ix, ty + 6, h);
+                    ix -= 8;
+                }
+        }
+        if (it->restart)
+            restart_note = 1;
+        if (val[0]) {
+            int tag = it->type == IT_CHOICE || it->type == IT_TOGGLE;
+            int font = it->type == IT_TEXT || it->type == IT_INFO ? FONT_SMALL : FONT_ITEM;
+            float maxw = it->type == IT_TEXT ? 440.0f : 360.0f, w = text_width(font, val);
+            float nudge = on ? 12.0f * (float)g_value_dir * (1 - ease_out(progress(g_t_value, 140))) : 0;
+            const char *v = val;
+            while (w > maxw && *v) /* long notes: show the end */
+                w -= text_width(font, (char[]){*v++, 0});
+            if (tag) { /* the value in a tag: cyan when selected, with arrows */
+                float x1 = right - (on ? 34 : 0) + nudge, x0 = x1 - w - 28;
+                outlined(x0, ty + 2, x1, ty + 46, 4, on ? C_CYAN : 0x80FFFFFFu);
+                text(font, x1 - 14, ty, 2, C_INK, v);
+                if (on) {
+                    text(FONT_ITEM, x0 - 12, ty, 2, C_INK, "<");
+                    text(FONT_ITEM, right + 4, ty, 2, C_INK, ">");
+                }
+            }
+            else
+                text(font, right + nudge, ty + (font == FONT_SMALL ? 10 : 0), 2, fg, v);
+        }
+    }
+    g_fade = o;
+
+    /* the paused game, small and tilted, on the right (drawn by draw_preview over its frame) */
+    {
+        float x1 = canvas_right() - 64 + 200 * slide, x0 = x1 - 300, py0 = 210, py1 = 210 + 300 * 9.0f / 16.0f * 1.2f;
+        box(x0 + 3, py0 + 9, x1 + 13, py1 + 13, 10, 0x55000000u); /* shadow */
+        box(x0 - 5, py0 - 5, x1 + 5, py1 + 5, 10, C_INK);
+        g_preview[0] = x0;
+        g_preview[1] = py0;
+        g_preview[2] = x1;
+        g_preview[3] = py1;
     }
 
-    /* help line for the selected row (fades in), and the footer (rises in) */
+    /* the help line on a black strip, the game's own motif at its left */
     {
         const Item *it = &items[sel];
-        float y = y0 + row * n + 34;
-        g_fade = o * ease_out(progress(g_t_sel, 200));
-        if (it->help && it->type != IT_INFO)
-            text(FONT_SMALL, 110, y, 0, C_WHITE, it->help);
-        g_fade = o;
-        if (restart_note)
-            text(FONT_SMALL, 110, y + 34, 0, C_GREY, "* applies the next time ReJet starts");
+        float y = y0 + row * n + 14, h = 48;
+        const char *line = it->help && it->type != IT_INFO ? it->help
+                           : restart_note                 ? "* applies the next time ReJet starts"
+                                                          : NULL;
+        if (y < g_preview[3] + 24) /* short pages: below the preview, not under it */
+            y = g_preview[3] + 24;
+        if (line) { /* no empty strip on pages without help (Controls) */
+            box(64, y, 78, y + h, 0, C_INK);
+            box(84, y, 94, y + h, 0, C_INK);
+            box(100, y, canvas_right() - 64, y + h, 0, C_INK);
+            g_fade = o * ease_out(progress(g_t_sel, 140));
+            text(FONT_SMALL, 120, y + 10, 0, line == it->help ? C_WHITE : 0xFFC9C9C9u, line);
+            g_fade = o;
+        }
     }
+
+    /* the button bar, with the build for bug reports */
     {
-        float dy = 80 * slide;
-        text(FONT_SMALL, canvas_right() - 24, 846 + dy, 2, C_GREY, "ReJet " REJET_BUILD); /* for bug reports */
-        box(canvas_left(), 880 + dy, canvas_right(), 930 + dy, 0, C_SHADE);
+        float dy = 70 * slide;
+        box(canvas_left(), 892 + dy, canvas_right(), 960 + dy, 0, C_INK);
+        text(FONT_SMALL, canvas_right() - 28, 912 + dy, 2, 0xFFC9C9C9u, "ReJet " REJET_BUILD);
         if (g_text_focus)
-            text(FONT_SMALL, 640, 891 + dy, 1, C_WHITE, "Type your note   Enter / Down  next   Esc  back");
+            text(FONT_SMALL, 640, 912 + dy, 1, C_WHITE, "Type your note   Enter / Down  next   Esc  back");
         else if (pad_connected()) { /* button icons with a controller, keys without one */
             static const struct { int button; const char *label; } hints[] = {
                 {BTN_A, "Select"}, {BTN_B, "Back"}, {BTN_DPAD, "Change"}, {BTN_START, "Resume"}};
@@ -1496,13 +1568,13 @@ static void draw_menu(void)
                 total += button_width(hints[i].button, h) + 10 + text_width(FONT_SMALL, hints[i].label) + 36;
             x = 640 - (total - 36) / 2;
             for (int i = 0; i < 4; i++) {
-                x += button_icon(hints[i].button, x, 888 + dy, h) + 10;
-                text(FONT_SMALL, x, 891 + dy, 0, C_WHITE, hints[i].label);
+                x += button_icon(hints[i].button, x, 909 + dy, h) + 10;
+                text(FONT_SMALL, x, 912 + dy, 0, C_WHITE, hints[i].label);
                 x += text_width(FONT_SMALL, hints[i].label) + 36;
             }
         }
         else
-            text(FONT_SMALL, 640, 891 + dy, 1, C_WHITE,
+            text(FONT_SMALL, 640, 912 + dy, 1, C_WHITE,
                  "Enter  select     Esc  back     Left / Right  change     F1  resume");
     }
     g_fade = saved_fade;
@@ -1517,13 +1589,26 @@ static void freeze_frame(void)
         IDirect3DTexture9_Release(g_frozen);
         g_frozen = NULL;
     }
-    if (FAILED(IDirect3DDevice9Ex_CreateTexture(DEV, g_bw, g_bh, 1, D3DUSAGE_RENDERTARGET, D3DFMT_X8R8G8B8,
-                                                D3DPOOL_DEFAULT, &g_frozen, NULL)))
+    /* Blurred once, here: shrunk to a quarter in two filtered halvings, then drawn back up
+     * filtered (draw_frozen), which softens the paused game behind the menu for nothing a frame. */
+    if (FAILED(IDirect3DDevice9Ex_CreateTexture(DEV, g_bw / 4 ? g_bw / 4 : 1, g_bh / 4 ? g_bh / 4 : 1, 1,
+                                                D3DUSAGE_RENDERTARGET, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &g_frozen,
+                                                NULL)))
         return;
     IDirect3DDevice9Ex_GetBackBuffer(DEV, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb);
     IDirect3DTexture9_GetSurfaceLevel(g_frozen, 0, &dst);
-    if (bb && dst)
-        IDirect3DDevice9Ex_StretchRect(DEV, bb, NULL, dst, NULL, D3DTEXF_NONE);
+    if (bb && dst) {
+        IDirect3DSurface9 *half = NULL;
+        if (SUCCEEDED(IDirect3DDevice9Ex_CreateRenderTarget(DEV, g_bw / 2 ? g_bw / 2 : 1, g_bh / 2 ? g_bh / 2 : 1,
+                                                            D3DFMT_X8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &half,
+                                                            NULL))) {
+            IDirect3DDevice9Ex_StretchRect(DEV, bb, NULL, half, NULL, D3DTEXF_LINEAR);
+            IDirect3DDevice9Ex_StretchRect(DEV, half, NULL, dst, NULL, D3DTEXF_LINEAR);
+            IDirect3DSurface9_Release(half);
+        }
+        else
+            IDirect3DDevice9Ex_StretchRect(DEV, bb, NULL, dst, NULL, D3DTEXF_LINEAR);
+    }
     if (dst)
         IDirect3DSurface9_Release(dst);
     if (bb)
@@ -1567,17 +1652,22 @@ static void run_menu(void)
             LeaveCriticalSection(&g_event_lock);
             handle(ev, ch);
         }
-        if (g_closing && progress(g_t_close, 180) >= 1)
+        if (g_closing && progress(g_t_close, 120) >= 1)
             break;
         ready();
-        if (SUCCEEDED(IDirect3DDevice9Ex_CreateStateBlock(DEV, D3DSBT_ALL, &saved))) {
-            draw_frozen(openness());
-            IDirect3DStateBlock9_Apply(saved);
-            IDirect3DStateBlock9_Release(saved);
-        }
+        /* the frozen frame is drawn outside flush's state save: keep the game's states (Z, cull,
+         * blend, shaders) or it renders see-through after the menu closes */
+        if (FAILED(IDirect3DDevice9Ex_CreateStateBlock(DEV, D3DSBT_ALL, &saved)))
+            saved = NULL;
+        draw_frozen(openness());
         draw_menu();
         draw_toasts();
         flush();
+        draw_preview();
+        if (saved) {
+            IDirect3DStateBlock9_Apply(saved);
+            IDirect3DStateBlock9_Release(saved);
+        }
         g_host.present();
         Sleep(15);
     }
@@ -1625,23 +1715,26 @@ static void draw_splash(unsigned long frame_draws)
         }
     }
     g_fade = o;
-    box(canvas_left() - 10, -10, canvas_right() + 10, 970, 0, C_BLACK);
-    /* the logo (black lettering) on the menu's lime band, which slides in */
-    w = g_logo_px ? 96 * g_logo_aspect : 300;
+    /* the menu's Garage look: the yellow field, orange bars and the logo as drawn */
+    box(canvas_left() - 10, -10, canvas_right() + 10, 970, 0, C_FIELD);
     {
-        float dx = -(1 - o) * 160, half = w / 2 + 70;
-        box(640 - half + dx, 380, 640 + half + dx, 500, 40, C_LIME);
-        box(640 - half + dx, 492, 640 + half - 30 + dx, 506, 40, C_PINK);
-        if (g_logo_px)
-            logo(640 - w / 2 + dx + 14, 392, 96, C_WHITE);
-        else
-            text(FONT_TITLE, 640 + dx, 395, 1, C_BLACK, "ReJet");
+        static const float bars[][2] = {{0, 30}, {48, 52}, {118, 22}, {158, 70}, {246, 26}};
+        for (int i = 0; i < 5; i++)
+            box(480 + bars[i][0], -10, 480 + bars[i][0] + bars[i][1], 120 - 100 * (1 - o), 0, C_ORANGE);
     }
-    /* a lime stripe sweeping along a dark track */
-    box(490, 556, 790, 562, 4, 0xFF1E2E30u);
+    w = g_logo_px ? 96 * g_logo_aspect : text_width(FONT_TITLE, "REJET");
+    {
+        float dx = -(1 - o) * 120;
+        if (g_logo_px)
+            logo(640 - w / 2 + dx, 392, 96, C_WHITE);
+        else
+            text(FONT_TITLE, 640 + dx, 400, 1, C_INK, "REJET");
+    }
+    /* a black stripe sweeping along a darker track */
+    box(490, 556, 790, 564, 4, 0x33000000u);
     x = 490 + (float)fmod((t - g_splash_start) * 0.25, 360.0) - 60;
-    box(x < 490 ? 490 : x, 556, x + 60 > 790 ? 790 : x + 60, 562, 4, C_LIME);
-    text(FONT_SMALL, 640, 588, 1, C_GREY, REJET_BUILD);
+    box(x < 490 ? 490 : x, 556, x + 60 > 790 ? 790 : x + 60, 564, 4, C_INK);
+    text(FONT_SMALL, 640, 590, 1, 0xFF5A4A10u, REJET_BUILD);
     g_fade = saved;
 }
 
