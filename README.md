@@ -75,6 +75,18 @@ Press **F1**, or **Back and Start together** on a controller, at any time. The g
 - **First-time setup** that finds and checks your game for you.
 - **Built-in bug reporting**: one menu option saves everything needed to look into a problem.
 
+### Sharper picture: before and after
+
+The same frame of the intro fly-through, rendered by ReJet with the original look and with its enhancements (zoomed 2x so the pixels show).
+
+**Anti-aliasing** smooths the jagged edges on rails, outlines and buildings:
+
+![Without and with 8x MSAA](docs/images/compare-antialiasing.png)
+
+**Texture filtering** keeps surfaces at an angle, like roofs and roads, crisp instead of smearing:
+
+![Original and 16x texture filtering](docs/images/compare-filtering.png)
+
 ## What's planned
 
 - **A sharper, widescreen-aware HUD** (the game's HUD stays in the middle 4:3 area for now).

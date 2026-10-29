@@ -81,3 +81,8 @@ Considered and left out: post-process AA (FXAA/SMAA) blurs the flat cel-shaded c
 ## Order
 
 Phase 1 first: a baseline before AA changes the cost of every frame, and the gate before anything else lands. Phases 2 and 3 can then run side by side, since they touch different files (`d3d.c` vs `ui/menu.c`).
+
+## Next (user, 2026-10-29)
+
+- **Alpha 3 (0.3.0)**: release what is done (Garage menu, setup, hint, icon, real controls, pointer hidden in play). Still to do before tagging: README screenshots of the new menu and setup (use PrintWindow captures; screen grabs catch other windows), the release gate, `tools/make_release.py`, push and the GitHub release.
+- **Alpha 4: polish and the ReJet HUD**, on a feature branch: the pause page as a row of cyan icon tiles (as the Garage mock-up; a first version is in `git stash`, "WIP: pause page icon tiles"), and a ReJet HUD switchable between the original and ours.
