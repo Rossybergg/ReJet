@@ -16,7 +16,8 @@ It works a bit like a translator. Xbox games are 32-bit x86 programs, just like 
 |---|---|
 | ![Skating in the GG's Garage in widescreen](docs/images/gameplay.png) | ![A cutscene with a speech bubble](docs/images/dialogue.png) |
 | ![The title menu](docs/images/title.png) | ![The map screen](docs/images/map.png) |
-| ![The ReJet menu](docs/images/rejet-menu.png) | ![First-time setup](docs/images/setup.png) |
+| ![The ReJet menu](docs/images/rejet-menu.png) | ![The ReJet menu's display settings](docs/images/rejet-display.png) |
+| ![First-time setup](docs/images/setup.png) | |
 
 ## What you need
 
@@ -71,7 +72,7 @@ Press **F1**, or **Back and Start together** on a controller, at any time. The g
 - **Volume control**, mute while you're in another window, an FPS counter, VSync.
 - **Smooth frame pacing**: on 60, 120 and 240 Hz displays every frame lines up with the screen's refresh, so motion stays even.
 - **Always 60 Hz**: the European disc's 50 Hz mode is gone, so the game always runs at full speed.
-- **A choice of HUD** (Game > HUD): *Classic* is the game's own, *ReJet* redraws it in a cleaner cel-shaded style at the screen's edges: health, cans and the boost sign, the speed meter, the score, trick combos, and **how many of the stage's tags are done** (single player for now).
+- **A choice of HUD** (Game > HUD): *Classic* is the game's own, *ReJet* redraws it in a cleaner cel-shaded style at the screen's edges, with new artwork that stays sharp at any resolution: health, cans and the boost sign, the speed meter, the score, trick combos, graffiti soul pickups, a crisp race timer, and **how many of the stage's tags are done** (single player for now).
 - **Skip the graffiti warning** at start-up with Start or A, like the logo movies.
 - **First-time setup** that finds and checks your game for you.
 - **Built-in bug reporting**: one menu option saves everything needed to look into a problem.
@@ -90,7 +91,8 @@ The same frame of the intro fly-through, rendered by ReJet with the original loo
 
 ## What's planned
 
-- **The ReJet HUD in split screen.**
+- **Widescreen for the remaining screens**: the loading screen, character select and the pause menu's map don't fit widescreen yet (parts clip or show at the sides).
+- **The rest of the ReJet HUD**: the tagging gauge, the yellow sign's other states, races with laps and positions, then split screen.
 - **Right-stick camera control** and **button remapping**.
 - **Your own music**: the Xbox let Jet Set Radio Future play songs from its hard drive, and ReJet could map that to a folder on your PC.
 - **Skipping the intro logos**, and controller rumble on/off.
