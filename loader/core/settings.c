@@ -7,10 +7,14 @@
 #include "kernel.h"
 #include "settings.h"
 
+/* Named fields: a field added to Settings must never shift the others' defaults (alpha 4 shipped
+ * builds where it did: Japanese, volume 0 and the HUD-edges experiment on in a fresh install). */
 Settings g_settings = {
-    1280, 960, 960, ASPECT_4_3, 0, 0, 1, 0, 1, 0, /* display (host vsync off: the emulated vblank paces the game) */
-    100, 0,                     /* audio */
-    GAME_LANG_ENGLISH,          /* console */
+    .width = 1280, .height = 960, .window_height = 960, .aspect = ASPECT_4_3,
+    .vsync = 0, /* host vsync off: the emulated vblank paces the game */
+    .fullscreen = 0, .anisotropy = 1, .show_fps = 0, .antialiasing = 1, .hud_style = 0,
+    .volume = 100, .mute_in_background = 0,
+    .language = GAME_LANG_ENGLISH,
 };
 
 static WCHAR g_path[MAX_PATH]; /* rejet.ini, or REJET_INI */
@@ -56,7 +60,6 @@ void settings_load(void)
     GET("Display", "ShowFPS", show_fps, 0, 1);
     GET("Display", "Antialiasing", antialiasing, 1, 8);
     GET("Display", "Hud", hud_style, 0, 1);
-    GET("Display", "HudEdges", hud_edges, 0, 1);
     GET("Audio", "Volume", volume, 0, 100);
     GET("Audio", "MuteInBackground", mute_in_background, 0, 1);
     GET("Console", "Language", language, GAME_LANG_JAPANESE, GAME_LANG_ITALIAN);
@@ -86,7 +89,6 @@ void settings_save(void)
     PUT("Display", "ShowFPS", show_fps);
     PUT("Display", "Antialiasing", antialiasing);
     PUT("Display", "Hud", hud_style);
-    PUT("Display", "HudEdges", hud_edges);
     PUT("Audio", "Volume", volume);
     PUT("Audio", "MuteInBackground", mute_in_background);
     PUT("Console", "Language", language);
