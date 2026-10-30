@@ -88,3 +88,16 @@ Phase 1 first: a baseline before AA changes the cost of every frame, and the gat
 - **Alpha 4: polish and the ReJet HUD**, on a feature branch: the pause page as a row of cyan icon tiles (as the Garage mock-up; a first version is in `git stash`, "WIP: pause page icon tiles"), and a ReJet HUD switchable between the original and ours.
 - **Regression to fix (alpha 4):** the start-up hint lost its controller button icons and shows text only (check whether rich_text gets the icons only with a pad connected, or whether the Garage restyle broke them).
 - **Release gate must cover setup (user, 2026-10-29):** a release can work on our machine yet ship a broken first-run setup. Add a scripted setup test to `tools/release_check.py` (a fresh folder with only ReJet.exe/rejet.dll, `REJET_SETUP_IMAGE` = the disc image, check it extracts, saves `[Game] Folder` and boots), at least whenever `setup.c`, `iso.c` or `settings.c` changed.
+
+## ReJet HUD: single player first (user, 2026-10-30)
+
+Finish the single-player ReJet HUD before any multiplayer or split-screen work. Done: health, cans and the boost sign, speed meter, score, trick combos, "N TRICKS", tags done / total (docs/HUD.md). Still to do in single player, in order:
+
+1. **Graffiti soul pickup** (node 0x1054D0, stat 0xB = soul number - 1): redraw as "GET No. 34" with the `hud_word_get` art.
+2. **The spray / tag gauge** (0x107300, drawn while tagging): restyle or keep the game's.
+3. **Unknown nodes** seen in play: 0x101BC0 (with can pickups), 0x1017A0 and 0x105A90 (3D-drawn), 0x1054D0: identify each and decide redraw or keep.
+4. **The tile pictograms in use**: find the game states they stand for (alert, bombs, skull, bolt, ball, runner) and show them on the tile.
+5. **Races and timed modes**: timer (small digits and colon), LAP, positions (ST / ND / RD / TH words are ready).
+6. Check the map screen (area name, 0x1080A0) and story scenes still hide or show the right pieces.
+
+**Then split screen** (multiplayer): the per-viewport walkers (0x11680 etc.), the HUD values per player index, and a multiplayer test setup.
