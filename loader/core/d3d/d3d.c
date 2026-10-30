@@ -461,7 +461,7 @@ static HRESULT XBAPI hle_Direct3D_CreateDevice(UINT Adapter, DWORD DeviceType, H
     msaa_setup(); /* the game's back buffer and depth (multisampled with anti-aliasing on) */
     /* no widescreen squeeze yet: 2D programs keep their x scale */
     g_vconst[VSH_C_2D][0] = g_vconst[VSH_C_2D][3] = 1.0f;
-    g_vconst[VSH_C_2D][1] = g_vconst[VSH_C_2D][2] = 0.0f; /* not HUD, no shift */
+    g_vconst[VSH_C_2D][1] = g_vconst[VSH_C_2D][2] = 0.0f;
     log_printf("d3d: Direct3D 9Ex device ready, window %p\n", (void *)g_wnd);
     {
         MenuHost host = {(struct IDirect3DDevice9Ex *)g_dev, g_wnd, present, request_capture, apply_window, change_display};
@@ -2770,64 +2770,12 @@ static int fvf_texcoord_offset(DWORD fvf, unsigned set)
  * programs (screen pixels in, the c[197] epilogue constant) and fixed-function geometry under
  * an orthographic projection (a narrowed host projection). Render targets aren't touched. */
 static float g_squeeze = 1.0f; /* this draw's squeeze for pre-transformed vertices (1 = none) */
-static float g_pivot = 0.5f;   /* ...around this fraction of the width: 0.5 the centre, 0 or 1 an edge */
-
-/* The gameplay HUD on the right (health bar, can count, tag counter, boost gauge, the spray can)
- * is squeezed around the right edge instead of the centre, so it sits in the corner of a wide
- * screen as it does at 4:3 (setting HudEdges). It is told apart by the game code that draws it:
- * every HUD draw, flat or 3D, runs under the HUD layer at 0x1367B; menus, the map, character
- * select and speech bubbles are drawn under another layer (0x1269B / 0x1386F) and stay centred,
- * so text keeps to its bubbles (captures of each, 10-29). Found by its return address on the
- * stack. The left side stays centred: the trick display there is drawn partly by the HUD layer
- * and partly by the shared sprite list, which can't be told apart from cutscene text, and moving
- * only part of it split "20 1 x 30" apart. */
-static int on_stack(DWORD ret_a, DWORD ret_b)
-{
-    static __declspec(thread) const DWORD *stack_top; /* the end of this thread's stack region */
-    const DWORD *sp = (const DWORD *)_AddressOfReturnAddress(), *end = sp + 4096; /* the 3D can sits deep */
-    if (!stack_top) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery(sp, &mi, sizeof mi))
-            stack_top = (const DWORD *)((const BYTE *)mi.BaseAddress + mi.RegionSize);
-    }
-    if (stack_top && end > stack_top)
-        end = stack_top;
-    for (; sp < end; sp++)
-        if (*sp == ret_a || *sp == ret_b)
-            return 1;
-    return 0;
-}
-
-static int hud_draw(void)
-{
-    return on_stack(0x0001367B, 0x0001367B);
-}
-
-/* The icon beside the can count (the yellow square) is drawn by a 3D vertex program, which
- * decides per vertex, so only that piece is shifted, by the code that draws it (0x10A76B and
- * 0x10A83F): the HUD's centre pieces drawn the same way (the direction marker, from 0x102F67)
- * straddle the middle and were stretched. */
-static int hud_icon_draw(void)
-{
-    return on_stack(0x0010A76B, 0x0010A83F);
-}
-
-/* The pivot for a HUD piece spanning mn..mx of a width from lo to hi: the right edge for the
- * right side's HUD, else the centre. */
-static float hud_pivot(float mn, float mx, float lo, float hi)
-{
-    (void)mx;
-    if (!g_settings.hud_edges || mn < (lo + hi) * 0.5f || !hud_draw())
-        return 0.5f;
-    return 1.0f;
-}
 
 static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
 {
-    float k = widescreen_k(), mn = 1e30f, mx = -1e30f, sq, c[4] = {1.0f, 0.0f, 0.0f, 1.0f}; /* 2D scale, 2D HUD, 3D HUD shift, - */
+    float k = widescreen_k(), mn = 1e30f, mx = -1e30f, sq, c[4] = {1.0f, 0.0f, 0.0f, 1.0f}; /* 2D scale, then unused */
     int fvf = !(g_cur_vs & 1), rhw = fvf && (g_cur_vs & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
     g_squeeze = 1.0f;
-    g_pivot = 0.5f;
     if (!fvf) { /* 2D programs get the constant (reset for everything else) */
         unsigned i = g_cur_vs >> 1;
         if (k > 1.01f && !g_cur_rt && verts && i < MAX_SHADERS && g_vs_2d[i]) {
@@ -2836,13 +2784,9 @@ static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
                 mn = x < mn ? x : mn;
                 mx = x > mx ? x : mx;
             }
-            if (!(mn <= 2.0f && mx >= (float)g_xw - 2.0f)) {
+            if (!(mn <= 2.0f && mx >= (float)g_xw - 2.0f))
                 c[0] = 1.0f / k;
-                c[1] = hud_pivot(mn, mx, 0.0f, (float)g_xw) > 0.75f ? 1.0f : 0.0f; /* right-side HUD: pivot on the edge */
-            }
         }
-        else if (k > 1.01f && !g_cur_rt && i < MAX_SHADERS && !g_vs_2d[i] && g_settings.hud_edges && hud_icon_draw())
-            c[2] = 1.0f - 1.0f / k; /* a 3D HUD piece (the icon by the can count): the shader shifts it */
         IDirect3DDevice9Ex_SetVertexShaderConstantF(g_dev, VSH_C_2D, c, 1);
         return;
     }
@@ -2854,16 +2798,14 @@ static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
             mn = x < mn ? x : mn;
             mx = x > mx ? x : mx;
         }
-        if (!(mn <= 2.0f && mx >= (float)g_xw - 2.0f)) {
+        if (!(mn <= 2.0f && mx >= (float)g_xw - 2.0f))
             g_squeeze = 1.0f / k;
-            g_pivot = hud_pivot(mn, mx, 0.0f, (float)g_xw);
-        }
         return;
     }
     { /* fixed-function geometry: only orthographic projections are 2D */
         D3DMATRIX p = g_xform[1], wvp;
         const D3DMATRIX *w = &g_xform[6], *vw = &g_xform[0];
-        float pivot = 0.0f; /* clip-space x: 0 the centre, -1 or 1 an edge (HUD) */
+        const float pivot = 0.0f; /* clip-space x: the centre */
         if (!(g_xform_set & 2))
             return;
         sq = 1.0f;
@@ -2887,42 +2829,8 @@ static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
                 mn = x < mn ? x : mn;
                 mx = x > mx ? x : mx;
             }
-            if (!(mn <= -0.98f && mx >= 0.98f)) {
+            if (!(mn <= -0.98f && mx >= 0.98f))
                 sq = 1.0f / k;
-                pivot = hud_pivot(mn, mx, -1.0f, 1.0f) * 2.0f - 1.0f; /* in clip space */
-            }
-        }
-        else if (k > 1.01f && !g_cur_rt && verts && p._34 != 0.0f && g_settings.hud_edges && hud_draw()) {
-            /* A 3D HUD piece (the spray can) in the perspective view: widescreen keeps its shape
-             * but draws it k times nearer the centre. On the right side, move it as far as the
-             * edge squeeze moves the flat pieces beside it: x' = x + (1 - 1/k) in clip space. */
-            D3DMATRIX wv;
-            float sum = 0.0f;
-            UINT n = 0;
-            for (int r = 0; r < 4; r++)
-                for (int col = 0; col < 4; col++)
-                    wv.m[r][col] = w->m[r][0] * vw->m[0][col] + w->m[r][1] * vw->m[1][col] +
-                                   w->m[r][2] * vw->m[2][col] + w->m[r][3] * vw->m[3][col];
-            for (UINT v = first; v <= last; v++) { /* where its vertices land: the offset is in them */
-                const float *q = (const float *)(verts + (SIZE_T)v * stride);
-                float ex = q[0] * wv._11 + q[1] * wv._21 + q[2] * wv._31 + wv._41;
-                float ey = q[0] * wv._12 + q[1] * wv._22 + q[2] * wv._32 + wv._42;
-                float ez = q[0] * wv._13 + q[1] * wv._23 + q[2] * wv._33 + wv._43;
-                float cx = ex * p._11 + ey * p._21 + ez * p._31 + p._41;
-                float cw = ex * p._14 + ey * p._24 + ez * p._34 + p._44;
-                if (cw > 0.0f) {
-                    sum += cx / cw;
-                    n++;
-                }
-            }
-            mn = mx = n ? sum / (float)n : 0.0f; /* the piece's centre, clip x (for the capture log) */
-            if (n && mn > 0.0f) {
-                float shift = 1.0f - 1.0f / k;
-                p._11 += shift * p._14;
-                p._21 += shift * p._24;
-                p._31 += shift * p._34;
-                p._41 += shift * p._44;
-            }
         }
         if (sq != 1.0f) { /* x' = (x - pivot) * sq + pivot, in clip space */
             p._11 = p._11 * sq + pivot * (1.0f - sq) * p._14;
@@ -2930,10 +2838,8 @@ static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
             p._31 = p._31 * sq + pivot * (1.0f - sq) * p._34;
             p._41 = p._41 * sq + pivot * (1.0f - sq) * p._44;
         }
-        if (g_capture_log && g_frame == g_capture_frame && (p._34 == 0.0f || hud_draw())) /* where 2D and HUD land */
-            fprintf(g_capture_log, "      squeeze: %s, x %.3f..%.3f, scale %.3f, pivot %.2f, hud %d, projection _31 %.3f _34 %.3f\n",
-                    p._34 == 0.0f ? "orthographic" : "perspective", mn, mx, sq, pivot,
-                    g_settings.hud_edges && hud_draw(), p._31, p._34);
+        if (g_capture_log && g_frame == g_capture_frame && p._34 == 0.0f) /* where 2D lands */
+            fprintf(g_capture_log, "      squeeze: x %.3f..%.3f, scale %.3f, projection _31 %.3f\n", mn, mx, sq, p._31);
         IDirect3DDevice9Ex_SetTransform(g_dev, D3DTS_PROJECTION, &p);
     }
 }
@@ -2983,7 +2889,7 @@ static const BYTE *fix_ff_vertices(const BYTE *verts, UINT first, UINT last, UIN
         BYTE *v = buf + (size_t)i * stride;
         memcpy(v, verts + (size_t)i * stride, stride);
         if (rhw) {
-            float at = (float)g_hw * g_pivot; /* squeezing only happens on the back buffer */
+            float at = (float)g_hw * 0.5f; /* around the centre; squeezing only happens on the back buffer */
             /* With anti-aliasing, edges on pixel boundaries (D3D9 puts pixel centres there) left the
              * top and left edge pixels half covered: a seam along the cutscene bars at the screen's
              * top and left. Half a pixel up and left covers them, as Direct3D 9 expects. */

@@ -26,8 +26,6 @@ typedef struct Settings {
     int show_fps;      /* frame-rate counter in the corner */
     int antialiasing;  /* MSAA samples: 1 = off (default, as the Xbox), 2, 4 or 8 */
     int hud_style;     /* 0 = Classic (the game's own HUD), 1 = ReJet (our HUD, docs/HUD.md) */
-    int hud_edges;     /* widescreen: the right side's HUD at the screen edge. Parked experiment (10-29), off by
-                          default and not in the menu: rejet.ini [Display] HudEdges=1 (docs/ENHANCEMENTS.md) */
     /* [Audio] */
     int volume;             /* master volume in percent (default 100) */
     int mute_in_background; /* silent while another program has the focus */
