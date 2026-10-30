@@ -65,6 +65,7 @@ static float g_tsx = 1.0f, g_tsy = 1.0f;
 static IDirect3DSurface9 *g_host_bb, *g_host_depth; /* the device's own, for switching back from a render target */
 static RECT g_vp_rect;   /* the Xbox viewport in render pixels (split screen) */
 static int g_vp_partial; /* viewport smaller than the screen: scissor and Clear use g_vp_rect */
+static D3DVIEWPORT9 g_xvp; /* the Xbox viewport, folded into fixed-function projections when partial */
 
 /* Draw state (ReWhacked's model). */
 static float g_vconst[VSH_CONSTANTS][4]; /* NV2A constant file (+ our extras) */
@@ -2056,6 +2057,7 @@ static HRESULT XBAPI hle_D3DDevice_SetViewport(const D3DVIEWPORT9 *pViewport)
 {
     const D3DVIEWPORT9 *v = pViewport;
     set_screen_constants(pViewport);
+    g_xvp = *pViewport;
     if (g_dev) {
         int full = v->X == 0 && v->Y == 0 && v->Width >= g_tw && v->Height >= g_th;
         g_vp_rect.left = (LONG)(v->X * g_tsx + 0.5f);
@@ -2885,6 +2887,14 @@ static int squeeze_2d_draw(const BYTE *verts, UINT first, UINT last, UINT stride
             p._21 = p._21 * sq + pivot * (1.0f - sq) * p._24;
             p._31 = p._31 * sq + pivot * (1.0f - sq) * p._34;
             p._41 = p._41 * sq + pivot * (1.0f - sq) * p._44;
+        }
+        if (g_vp_partial) { /* the Xbox viewport, which programs get from c-38/c-37 */
+            float vsx = g_xvp.Width / (float)g_tw, vox = (2.0f * g_xvp.X + g_xvp.Width) / g_tw - 1.0f;
+            float vsy = g_xvp.Height / (float)g_th, voy = 1.0f - (2.0f * g_xvp.Y + g_xvp.Height) / g_th;
+            for (int r = 0; r < 4; r++) {
+                p.m[r][0] = p.m[r][0] * vsx + p.m[r][3] * vox;
+                p.m[r][1] = p.m[r][1] * vsy + p.m[r][3] * voy;
+            }
         }
         if (g_capture_log && g_frame == g_capture_frame && p._34 == 0.0f) /* where 2D lands */
             fprintf(g_capture_log, "      squeeze: x %.3f..%.3f, scale %.3f, projection _31 %.3f\n", mn, mx, sq, p._31);
