@@ -1544,6 +1544,10 @@ static void draw_tiles(const Item *items, int n, int sel, float slide)
             y -= lift;
             box(x + 8, y + 8, x + w + 8, y + size + 8, 0, C_INK);
         }
+        if (on) { /* the selected tile pulses, as the game's selected icon */
+            float pulse = 0.5f + 0.5f * sinf((float)(now_ms() / 1000.0) * 6.2831853f / 0.55f);
+            box(x - 7, y - 7, x + w + 7, y + size + 7, 0, (DWORD)(90 * pulse) << 24 | 0x0037B8C8u);
+        }
         outlined(x, y, x + w, y + size, 4, bg);
         icon(g_page, it->target, x + w / 2 - 32, y + 18, bg);
         if (l)
@@ -1570,12 +1574,21 @@ static void draw_menu(void)
 
     /* the field and the orange bars drop in (taller on the pause page, as the boards) */
     g_fade = o;
+    /* the game's Garage screens never stand still (F9 bursts of them, docs/MENU_DESIGN.md): a
+     * two-tone field, bars that keep shifting, a light band sweeping down, all on the clock */
     box(canvas_left() - 10, -10, canvas_right() + 10, 970, 0, C_FIELD);
+    box(canvas_left() - 10, DY(main_page ? 380 : 330), canvas_right() + 10, 970, 0, 0x1AC86400u); /* deeper lower half */
     {
         static const float bars[][2] = {{0, 26}, {44, 44}, {106, 18}, {142, 60}, {220, 22}};
-        float h = DY(main_page ? 96 : 64), dy = -h * slide;
-        for (int i = 0; i < 5; i++)
-            box(DX(60 + bars[i][0]), -10 + dy, DX(60 + bars[i][0] + bars[i][1]), h + dy, 0, C_ORANGE);
+        float h = DY(main_page ? 96 : 64), dy = -h * slide, ts = (float)(t / 1000.0);
+        for (int i = 0; i < 5; i++) {
+            float drift = 10 * sinf(ts * (0.9f + 0.37f * i) + i * 1.7f), grow = 6 * sinf(ts * (1.3f + 0.21f * i) + i);
+            box(DX(60 + bars[i][0] + drift), -10 + dy, DX(60 + bars[i][0] + bars[i][1] + drift + grow), h + dy, 0, C_ORANGE);
+        }
+    }
+    { /* the light band */
+        float p = (float)fmod(t / 2600.0, 1.0), y = DY(140) + p * DY(560);
+        box(canvas_left(), y, canvas_right(), y + DY(10), 0, 0x30FFF0C0u);
     }
 
     /* the logo (black, as drawn) and the page tag: white on the pause page, cyan elsewhere */
@@ -1622,6 +1635,11 @@ static void draw_menu(void)
         if (on) { /* lifted: white with a black drop shadow */
             float lift = 6 * ease_out(progress(g_t_sel, 120));
             box(X0 + rx + 8, y + 8 - lift, X1 + rx + 8, y + rh + 8 - lift, 0, C_INK);
+            {
+                float pulse = 0.5f + 0.5f * sinf((float)(t / 1000.0) * 6.2831853f / 0.55f);
+                box(X0 + rx - lift - 6, y - lift - 6, X1 + rx - lift + 6, y + rh - lift + 6, 0,
+                    (DWORD)(80 * pulse) << 24 | 0x0037B8C8u);
+            }
             outlined(X0 + rx - lift, y - lift, X1 + rx - lift, y + rh - lift, 3.5f, C_WHITE);
             ty -= lift;
             right -= lift;
@@ -1729,8 +1747,24 @@ static void draw_menu(void)
     if (main_page) {
         float dx = -200 * slide;
         box(DX(72) + dx, DY(482), DX(72 + 1136) + dx, DY(482 + 18), 0, C_ORANGE);
-        arrow(DX(72) + dx, DY(532), DW(80), 0xFFC96A07u);
-        arrow(DX(172) + dx, DY(532), DW(60), 0xFFC96A07u);
+        { /* a slowly turning crossed circle, and the arrows sliding right with fading trails */
+            float cx = DX(96) + dx, cy = DY(532), r = 26, a = (float)(t / 1000.0) * 1.2f;
+            for (int k = 0; k < 24; k++) {
+                float a0 = k * 6.2831853f / 24, a1 = (k + 1) * 6.2831853f / 24;
+                stroke(cx + r * cosf(a0), cy + r * sinf(a0), cx + r * cosf(a1), cy + r * sinf(a1), 5, 0xFFC96A07u);
+            }
+            stroke(cx - r * 0.7f * cosf(a), cy - r * 0.7f * sinf(a), cx + r * 0.7f * cosf(a), cy + r * 0.7f * sinf(a), 5,
+                   0xFFC96A07u);
+        }
+        {
+            float p = (float)fmod(t / 1400.0, 1.0), slide_x = DW(40) * p;
+            for (int k = 2; k >= 0; k--) {
+                DWORD alpha = (DWORD)(255 * (k == 0 ? 1 - p * 0.6f : 0.35f / k)) << 24;
+                float back = k * DW(14);
+                arrow(DX(150) + dx + slide_x - back, DY(532), DW(80), alpha | 0x00C96A07u);
+                arrow(DX(250) + dx + slide_x - back, DY(532), DW(60), alpha | 0x00C96A07u);
+            }
+        }
     }
 
     /* the button bar, with the build for bug reports */

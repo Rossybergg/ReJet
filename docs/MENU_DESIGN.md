@@ -35,3 +35,13 @@ From the game's own screens (the Garage menu, character select and map, captured
 4. **Readable at any size.** Text sized for a TV at 3 metres by default, with a larger-text option; contrast 4.5:1 or better.
 5. **Sound.** Move, select, back and toggle sounds, short and punchy. The game's own menu sounds, played from the player's disc, keep it in character without shipping anything.
 6. **Fonts we can ship.** An open-licence (OFL) display and text face, embedded in rejet.dll, downloaded only once chosen and approved.
+
+## Motion, from the game's own Garage screens (2026-10-30)
+
+F9 bursts of the game's Load and Garage screens show they never stand still. The ReJet menu borrows the same motion, subtly and on the clock (so it runs at the menu's 60 fps):
+
+- a two-tone field: lighter yellow above, a deeper orange lower half;
+- the orange bars at the top keep drifting and changing width;
+- a light band sweeps down the screen and loops;
+- the arrows slide right with fading trails, next to a slowly turning crossed circle;
+- the selected tile (and the selected row) pulses with a soft cyan glow.
