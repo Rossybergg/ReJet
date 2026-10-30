@@ -245,12 +245,15 @@ static void __fastcall hud_draw_tree(unsigned char *node)
                 {
                     int index = *(const int *)(node + 0x2B4);
                     log_stats(index);
-                    g_values.score = player_stat(index, 6);
-                    g_values.trick_points = player_stat(index, 0xD);
-                    g_values.trick_mult = player_stat(index, 0xE);
-                    g_values.trick_total = player_stat(index, 0xF);
-                    g_values.tricks = player_stat(index, 0xA);
-                    stage_tags(&g_values.tags_done, &g_values.tags_total);
+                    if (g_settings.hud_style == 1) { /* only the ReJet HUD uses these */
+                        g_values.score = player_stat(index, 6);
+                        g_values.trick_points = player_stat(index, 0xD);
+                        g_values.trick_mult = player_stat(index, 0xE);
+                        g_values.trick_total = player_stat(index, 0xF);
+                        g_values.tricks = player_stat(index, 0xA);
+                        if (d3d_frame() % 30 == 0) /* walks the stage's tag spots: twice a second is plenty */
+                            stage_tags(&g_values.tags_done, &g_values.tags_total);
+                    }
                 }
             }
             else if (draw == 0x10E680) { /* cans held, and the cap */
@@ -272,6 +275,8 @@ static void __fastcall hud_draw_tree(unsigned char *node)
             }
             else if (draw == 0x104AD0) { /* a tag done ("5/16"): fade +0x134 */
                 g_values.tag_fade = *(const float *)(node + 0x134);
+                g_values.tags_done = *(const int *)(node + 0x48); /* its numbers: the counter updates at once */
+                g_values.tags_total = *(const int *)(node + 0x4C);
                 g_tag_frame = d3d_frame();
             }
             else if (draw == 0x1054D0) { /* a graffiti soul picked up: its number (+0x11C, its own player's stat
