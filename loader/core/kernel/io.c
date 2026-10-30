@@ -381,6 +381,11 @@ static NTSTATUS xbox_open(PHANDLE FileHandle, ACCESS_MASK DesiredAccess, PXOBJEC
                    CreateDisposition, CreateOptions);
     KTRACE("%s('%s' -> %ls, access %08lX, share %lu, disp %lu, opt %08lX) -> %08lX handle %p\n", api, xpath, host,
            DesiredAccess, ShareAccess, CreateDisposition, CreateOptions, st, st >= 0 ? *FileHandle : NULL);
+    if (st == (NTSTATUS)0xC0000034 && dev != DEV_DISC) { /* not found on the hard disk: does Windows see it? */
+        DWORD attrs = GetFileAttributesW(host), err = GetLastError();
+        log_printf("io: %ls not found by NtCreateFile; GetFileAttributes %08lX (error %lu), %u characters\n", host,
+                   attrs, attrs == INVALID_FILE_ATTRIBUTES ? err : 0, (unsigned)wcslen(host));
+    }
     if (st >= 0)
         remember_handle(*FileHandle, dev, partition);
     return st;
