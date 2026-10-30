@@ -6,6 +6,9 @@
 extern const HlePatch g_hud_patches[];
 extern const unsigned g_hud_patch_count;
 
+/* Set while one of the HUD module's draw methods runs (REJET_HUDTEX dumps its textures). */
+extern volatile int g_hud_in_draw;
+
 /* What the game's own HUD would show this frame, read from its nodes (docs/HUD.md). */
 typedef struct HudValues {
     float health;     /* 0..1: current health, over the whole bar */

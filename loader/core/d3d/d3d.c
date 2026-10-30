@@ -33,6 +33,7 @@
 #include "psh.h"
 #include "settings.h"
 #include "tex.h"
+#include "ui/hud.h"
 #include "ui/menu.h"
 #include "version.gen.h"
 #include "vsh.h"
@@ -2581,6 +2582,24 @@ static int prepare_draw(void)
         }
         else {
             t = g_textures[s] ? tex_get((IDirect3DDevice9 *)g_dev, g_textures[s], scale) : NULL;
+            if (g_hud_in_draw && g_textures[s]) { /* REJET_HUDTEX=1: the HUD's textures as PNGs, once each */
+                static int on = -1;
+                static unsigned long long done[64];
+                static unsigned ndone;
+                unsigned long long name = tex_name(g_textures[s]);
+                unsigned k = 0;
+                if (on < 0)
+                    on = GetEnvironmentVariableA("REJET_HUDTEX", NULL, 0) > 0;
+                while (on && k < ndone && done[k] != name)
+                    k++;
+                if (on && k == ndone && ndone < 64) {
+                    char path[MAX_PATH];
+                    done[ndone++] = name;
+                    CreateDirectoryA("hud_textures", NULL);
+                    snprintf(path, sizeof path, "hud_textures\\%016llX.png", name);
+                    log_printf("hud: texture %s %s\n", path, tex_dump_png(g_textures[s], path) ? "saved" : "not saved");
+                }
+            }
         }
         perf_end(PERF_TEX, t0);
         IDirect3DDevice9Ex_SetTexture(g_dev, s, t);

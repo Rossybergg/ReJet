@@ -19,3 +19,5 @@ void tex_new_frame(void);
 /* The texture's content name (sample_hash, as for HD replacements) from its last upload; 0 if
  * it hasn't been used yet. Recognises specific images, such as the graffiti warning. */
 unsigned long long tex_name(const XD3DPixelContainer *x);
+/* Level 0 of an Xbox 2D texture as a PNG (for artists redrawing HUD pieces); 1 if written. */
+int tex_dump_png(const XD3DPixelContainer *x, const char *path);

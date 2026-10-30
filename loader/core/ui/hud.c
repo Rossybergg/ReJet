@@ -26,6 +26,7 @@ ULONG d3d_frame(void); /* d3d.c */
 
 static int g_hide = -1; /* REJET_HUDHIDE=1: leave out the original HUD; =cycle: one method at a time */
 static const DWORD HUD_METHODS[] = {0x1080A0, 0x10DEA0, 0x106AD0, 0x105A90, 0x10E680, 0x10A590};
+volatile int g_hud_in_draw;
 static HudValues g_values;
 
 /* The HUD-visibility flags of the player a HUD node belongs to, as its draw method reads them:
@@ -176,7 +177,9 @@ static void __fastcall hud_draw_tree(unsigned char *node)
             }
             if (!skip) {
                 ((MatrixFn)(UINT_PTR)0x1BB480)();
+                g_hud_in_draw = draw >= HUD_CODE_START && draw < HUD_CODE_END;
                 ((NodeDraw)(UINT_PTR)draw)(node, NULL, 0);
+                g_hud_in_draw = 0;
                 ((MatrixFn)(UINT_PTR)0x1BB510)();
             }
         }

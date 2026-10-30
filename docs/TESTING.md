@@ -65,6 +65,7 @@ Set as environment variables before starting `ReJet.exe`:
 | `REJET_PERF=<ms>` | Frames slower than ms, with a time breakdown |
 | `REJET_PERFLOG=1` | Every frame to `logs\perf_<time>.csv` (work and wait times, ReJet's hot paths, draws, F10 markers); `python tools/perf_report.py [csv]` summarises it (time on screen per frame, stutters and their causes) |
 | `REJET_DUMPHLSL=1` | The HLSL ReJet generates for each vertex program and combiner to `hlsl\vs_NNN.hlsl` / `hlsl\ps_NNN.hlsl` (NNN as in captures' `vs` / `ps` numbers) |
+| `REJET_HUDTEX=1` | Saves each texture the game's HUD uses as a PNG, once, into `hud_textures\` (git-ignored; your disc's art, for reference only, never committed) |
 | `REJET_TEXFULL=1` | Texture change checks read every word instead of a sample (to rule out missed CPU writes); texture changes after the first upload are always logged (`tex: changed`) |
 | `REJET_PACING=60` | Frame pacing on a fixed 60 Hz clock instead of the display's refresh (for comparisons) |
 | `REJET_SKIPWARNING=1` | Skip the graffiti warning at start-up without pressing anything |

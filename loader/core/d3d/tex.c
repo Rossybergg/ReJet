@@ -9,6 +9,7 @@
 #define COBJMACROS
 #include <windows.h>
 #include <d3d9.h>
+#include <wincodec.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -477,4 +478,101 @@ IDirect3DBaseTexture9 *tex_get(IDirect3DDevice9 *dev, const XD3DPixelContainer *
     }
     perf_end(PERF_TEXUP, t_up);
     return e->host;
+}
+
+/* ------------------------------------------------------------------ PNG dump (REJET_HUDTEX) */
+
+/* Write w x h A8R8G8B8 pixels as a PNG with the Windows imaging component. */
+static int save_png(const char *path, const DWORD *px, unsigned w, unsigned h)
+{
+    IWICImagingFactory *wic = NULL;
+    IWICStream *stream = NULL;
+    IWICBitmapEncoder *enc = NULL;
+    IWICBitmapFrameEncode *frame = NULL;
+    WCHAR wpath[MAX_PATH];
+    WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
+    int ok = 0;
+    MultiByteToWideChar(CP_ACP, 0, path, -1, wpath, MAX_PATH);
+    CoInitializeEx(NULL, COINIT_MULTITHREADED); /* this thread may not have COM yet; a mismatch is fine */
+    if (SUCCEEDED(CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory,
+                                   (void **)&wic)) &&
+        SUCCEEDED(IWICImagingFactory_CreateStream(wic, &stream)) &&
+        SUCCEEDED(IWICStream_InitializeFromFilename(stream, wpath, GENERIC_WRITE)) &&
+        SUCCEEDED(IWICImagingFactory_CreateEncoder(wic, &GUID_ContainerFormatPng, NULL, &enc)) &&
+        SUCCEEDED(IWICBitmapEncoder_Initialize(enc, (IStream *)stream, WICBitmapEncoderNoCache)) &&
+        SUCCEEDED(IWICBitmapEncoder_CreateNewFrame(enc, &frame, NULL)) &&
+        SUCCEEDED(IWICBitmapFrameEncode_Initialize(frame, NULL)) &&
+        SUCCEEDED(IWICBitmapFrameEncode_SetSize(frame, w, h)) &&
+        SUCCEEDED(IWICBitmapFrameEncode_SetPixelFormat(frame, &fmt)) &&
+        SUCCEEDED(IWICBitmapFrameEncode_WritePixels(frame, h, w * 4, w * h * 4, (BYTE *)px)) &&
+        SUCCEEDED(IWICBitmapFrameEncode_Commit(frame)) && SUCCEEDED(IWICBitmapEncoder_Commit(enc)))
+        ok = 1;
+    if (frame)
+        IWICBitmapFrameEncode_Release(frame);
+    if (enc)
+        IWICBitmapEncoder_Release(enc);
+    if (stream)
+        IWICStream_Release(stream);
+    if (wic)
+        IWICImagingFactory_Release(wic);
+    return ok;
+}
+
+/* One Xbox texel of a 16- or 8-bit host format as A8R8G8B8. */
+static DWORD expand_texel(D3DFORMAT f, unsigned v)
+{
+    unsigned a = 255, r, g, b;
+    switch (f) {
+    case D3DFMT_A1R5G5B5: a = v & 0x8000 ? 255 : 0; /* fall through */
+    case D3DFMT_X1R5G5B5: r = (v >> 10 & 31) * 255 / 31; g = (v >> 5 & 31) * 255 / 31; b = (v & 31) * 255 / 31; break;
+    case D3DFMT_R5G6B5: r = (v >> 11 & 31) * 255 / 31; g = (v >> 5 & 63) * 255 / 63; b = (v & 31) * 255 / 31; break;
+    case D3DFMT_A4R4G4B4: a = (v >> 12 & 15) * 17; r = (v >> 8 & 15) * 17; g = (v >> 4 & 15) * 17; b = (v & 15) * 17; break;
+    case D3DFMT_A8: a = v; r = g = b = 255; break;
+    case D3DFMT_A8L8: a = v >> 8; r = g = b = v & 255; break;
+    default: r = g = b = v & 255; break; /* L8 */
+    }
+    return (DWORD)a << 24 | r << 16 | g << 8 | b;
+}
+
+int tex_dump_png(const XD3DPixelContainer *x, const char *path)
+{
+    FormatInfo fi;
+    uint32_t xf = XFMT_FORMAT(x->Format);
+    const unsigned char *data = (const unsigned char *)(UINT_PTR)x->Resource.Data;
+    unsigned w, h, pitch;
+    DWORD *px;
+    int ok;
+    if (!data || !format_info(xf, &fi) || XFMT_DIMENSION(x->Format) == 3 || (x->Format & XFMT_CUBEMAP))
+        return 0;
+    if (x->Size) {
+        w = XSIZE_WIDTH(x->Size);
+        h = XSIZE_HEIGHT(x->Size);
+        pitch = XSIZE_PITCH(x->Size);
+    }
+    else {
+        w = 1u << XFMT_USIZE(x->Format);
+        h = 1u << XFMT_VSIZE(x->Format);
+        pitch = w * fi.bpp / 8;
+    }
+    if (!(px = (DWORD *)malloc((size_t)w * h * 4)))
+        return 0;
+    if (fi.dxt)
+        dxt_decode(&fi, data, w, h, px);
+    else
+        for (unsigned y = 0; y < h; y++)
+            for (unsigned xx = 0; xx < w; xx++) {
+                unsigned i = fi.linear ? y * (pitch * 8 / fi.bpp) + xx : swizzle(xx, y, w, h);
+                DWORD v;
+                if (fi.bpp == 32)
+                    v = ((const DWORD *)data)[i] | (fi.host == D3DFMT_X8R8G8B8 ? 0xFF000000u : 0);
+                else if (fi.bpp == 16)
+                    v = expand_texel(fi.host, ((const WORD *)data)[i]);
+                else
+                    v = expand_texel(fi.expand_al8 ? D3DFMT_A8L8 : fi.host,
+                                     fi.expand_al8 ? data[i] * 0x101u : data[i]);
+                px[y * w + xx] = v;
+            }
+    ok = save_png(path, px, w, h);
+    free(px);
+    return ok;
 }
