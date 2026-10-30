@@ -2037,6 +2037,26 @@ static void draw_rejet_hud(void)
         box(cx + 5, cy + 2, cx + 21, cy + 11, 0, 0xFF1A1A1Au);
         box(cx + 7, cy + 4, cx + 19, cy + 10, 0, 0xFFC8C8C8u);
         outlined_text(FONT_ITEM, cx1, cy + 12, 2, C_WHITE, s);
+        if (v.cans >= 10) { /* boost ready: the game's yellow skater sign, left of the can */
+            float bx1 = cx - 16, bx0 = bx1 - 56, by0 = cy + 6, by1 = by0 + 56;
+            float pulse = 0.5f + 0.5f * sinf((float)(now_ms() / 1000.0) * 6.2831853f / 0.8f);
+            box(bx0 + 3, by0 + 4, bx1 + 4, by1 + 5, 0, 0x50000000u);
+            box(bx0 - 2.5f, by0 - 2.5f, bx1 + 2.5f, by1 + 2.5f, 0, 0xFF1A1A1Au);
+            box(bx0, by0, bx1, by1, 0, mix(0xFFF2B705u, 0xFFFFD34Du, pulse));
+            box(bx0, by1 - 10, bx1, by1, 0, 0xFFD39A00u);
+            { /* a skater leaning into a boost: head, body, arm and legs as strokes */
+                float hx = bx0 + 18, hy = by0 + 16;
+                for (int k = 0; k < 12; k++) {
+                    float a0 = k * 6.2831853f / 12, a1 = (k + 1) * 6.2831853f / 12;
+                    stroke(hx + 5 * cosf(a0), hy + 5 * sinf(a0), hx + 5 * cosf(a1), hy + 5 * sinf(a1), 4.5f, 0xFF1A1A1Au);
+                }
+                stroke(hx + 6, hy + 6, bx0 + 34, by0 + 30, 5, 0xFF1A1A1Au);  /* body */
+                stroke(hx + 8, hy + 10, bx0 + 42, by0 + 16, 4, 0xFF1A1A1Au); /* arm forward */
+                stroke(bx0 + 34, by0 + 30, bx0 + 24, by0 + 44, 4.5f, 0xFF1A1A1Au); /* back leg */
+                stroke(bx0 + 34, by0 + 30, bx0 + 46, by0 + 42, 4.5f, 0xFF1A1A1Au); /* front leg */
+                stroke(bx0 + 40, by0 + 44, bx0 + 50, by0 + 44, 3.5f, 0xFF1A1A1Au); /* skate */
+            }
+        }
     }
     if (v.show_speed) { /* speed: the game's wedge at the bottom right; the fill is a gradient along it, purple at
        * the slow end to red at the fast end, as the game's, with a thin dark outline */

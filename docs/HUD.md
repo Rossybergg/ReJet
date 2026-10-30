@@ -16,8 +16,8 @@ That needs two things: a way to leave out the original HUD, and the values it sh
 | 0x10E680 | 0x1D6138 | the can icon and the can count |
 | 0x10DEA0 | 0x1D60F0 | the speed meter (bottom right) |
 | 0x1080A0 | 0x1D5DE8 | the can icon, and the area name on the map screen (a shared sprite class) |
-| 0x105A90 | 0x1D5D20 | nothing visible while skating: probably trick, score or tag text that only shows in some states |
-| 0x10A590 | 0x1D5E28 | as above |
+| 0x105A90 | 0x1D5D20 | nothing visible while skating; not seen after the first minutes of play |
+| 0x10A590 | 0x1D5E28 | most likely the **boost icon** (the yellow skater sign shown from 10 cans): it draws every frame but showed nothing below 10 cans, and the sign stayed on screen with the ReJet HUD hiding the others (play-test burst, 2026-10-30); to confirm |
 | 0x03CA80, 0x07E2D0, 0x0BB4A0, 0x046540, 0x0F8030, 0x0FE6E0, 0x0F8A40, 0x0F8810 | | other 2D (title, map, effects) |
 
 ## Leaving out the original HUD

@@ -158,7 +158,9 @@ static void __fastcall hud_draw_tree(unsigned char *node)
                 g_values.show_cans = (player_flags(*(const int *)(node + 0x100)) & 0x4000000u) != 0;
             }
             /* HUD: ReJet draws its own health, cans and speed meter (menu.c) */
-            if (g_settings.hud_style == 1 && (draw == 0x106AD0 || draw == 0x10E680 || draw == 0x10DEA0))
+            /* 0x10A590: the boost icon shown from 10 cans (seen in play-test bursts), redrawn by ReJet */
+            if (g_settings.hud_style == 1 &&
+                (draw == 0x106AD0 || draw == 0x10E680 || draw == 0x10DEA0 || draw == 0x10A590))
                 skip = 1;
             if (g_hide == 2) { /* research: from frame 4200, hide HUD_METHODS[k] for 480 frames each, then none */
                 static int last = -1;
