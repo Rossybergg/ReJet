@@ -92,8 +92,7 @@ The same frame of the intro fly-through, rendered by ReJet with the original loo
 
 ## What's planned
 
-- **Widescreen for the remaining screens**: the loading screen, character select and the pause menu's map don't fit widescreen yet (parts clip or show at the sides).
-- **The rest of the ReJet HUD**: the tagging gauge, the yellow sign's other states, races with laps and positions, then split screen.
+- **The rest of the ReJet HUD**: the yellow sign's other states, races with laps and positions, then split screen.
 - **Right-stick camera control** and **button remapping**.
 - **Your own music**: the Xbox let Jet Set Radio Future play songs from its hard drive, and ReJet could map that to a folder on your PC.
 - **Skipping the intro logos**, and controller rumble on/off.
