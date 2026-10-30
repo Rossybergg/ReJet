@@ -24,6 +24,8 @@ typedef struct HudValues {
     float combo_fade, combo_slide, combo_total_fade; /* 0x1009F0: points x multiplier, then the total */
     float tricks_fade, tricks_slide;                 /* 0x102940: "N TRICKS" */
     float tag_fade;                                  /* 0x104AD0: "5/16" when a tag is done */
+    float soul_fade;                                 /* 0x1054D0: "GET No. N", a graffiti soul picked up */
+    int soul;                                        /* its number, as the game shows it */
 } HudValues;
 
 /* The values, and 1 while the game is drawing its gameplay HUD (not on the map or in cutscenes). */

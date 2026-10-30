@@ -865,8 +865,10 @@ static void flush(void)
 {
     IDirect3DSurface9 *bb = NULL, *old_rt = NULL;
     D3DVIEWPORT9 vp = {0, 0, g_bw, g_bh, 0.0f, 1.0f};
-    if (!g_nv || !g_atlas)
+    if ((!g_nv && !g_nsv) || !g_atlas) { /* nothing this frame (sprites alone still draw) */
+        g_nsv = 0;
         return;
+    }
     if (!g_state && FAILED(IDirect3DDevice9Ex_CreateStateBlock(DEV, D3DSBT_ALL, &g_state)))
         return;
     IDirect3DStateBlock9_Capture(g_state);
@@ -910,7 +912,8 @@ static void flush(void)
     IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
     IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_SRGBTEXTURE, FALSE);
     IDirect3DDevice9Ex_BeginScene(DEV);
-    IDirect3DDevice9Ex_DrawPrimitiveUP(DEV, D3DPT_TRIANGLELIST, (UINT)g_nv / 3, g_v, sizeof(Vertex));
+    if (g_nv)
+        IDirect3DDevice9Ex_DrawPrimitiveUP(DEV, D3DPT_TRIANGLELIST, (UINT)g_nv / 3, g_v, sizeof(Vertex));
     if (g_nsv && g_spr_tex) { /* the HUD sprites, over the batch */
         IDirect3DDevice9Ex_SetTexture(DEV, 0, (IDirect3DBaseTexture9 *)g_spr_tex);
         IDirect3DDevice9Ex_DrawPrimitiveUP(DEV, D3DPT_TRIANGLELIST, (UINT)g_nsv / 3, g_sv, sizeof(Vertex));
@@ -2213,8 +2216,15 @@ static void draw_rejet_hud(void)
 {
     HudValues v;
     float saved = g_fade;
-    if (g_settings.hud_style != 1 || !hud_values(&v))
+    if (g_settings.hud_style != 1)
         return;
+    if (!hud_values(&v)) { /* the gameplay HUD is off (as in a soul pickup's camera spin): only the popups the
+                            * game still draws, such as the soul's, may show */
+        v.show_health = v.show_cans = v.show_speed = 0;
+        v.combo_fade = v.tricks_fade = v.tag_fade = 0;
+        if (v.soul_fade <= 0)
+            return;
+    }
     g_fade = 1;
     if (v.show_health) { /* health: a gold bar */
         float x1 = DX(1280 - 40), x0 = x1 - DW(300), y0 = DY(32), y1 = y0 + DY(16);
@@ -2300,6 +2310,18 @@ static void draw_rejet_hud(void)
         snprintf(s, sizeof s, "%d", v.tricks);
         x += hud_number(s, x, y, 32, C_WHITE) + 8;
         sprite(SPR_WORD_TRICKS, x, y + 4, 26, C_WHITE);
+        g_fade = 1;
+    }
+    if (v.soul_fade > 0 && v.soul > 0) { /* a graffiti soul picked up: "GET No. N", large in the centre, where
+                                          * the game shows it during the pickup's camera spin */
+        char s[16];
+        float wh = 44, dh = 64, w, x, y = DY(250);
+        g_fade = v.soul_fade;
+        snprintf(s, sizeof s, "%d", v.soul);
+        w = sprite_width(SPR_WORD_GET, wh) + 12 + hud_number_width(s, dh);
+        x = (DX(0) + DX(1280)) / 2 - w / 2;
+        x += sprite(SPR_WORD_GET, x, y + dh * 0.95f - wh, wh, C_WHITE) + 12; /* on the digits' baseline */
+        hud_number(s, x, y, dh, 0xFFE6C800u);
         g_fade = 1;
     }
     if (v.show_speed) { /* speed: the game's wedge at the bottom right; the fill is a gradient along it, purple at
