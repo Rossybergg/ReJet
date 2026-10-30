@@ -255,6 +255,131 @@ static void scale_logo(DWORD *dst, UINT w, UINT h, UINT pitch)
     }
 }
 
+/* ---- HUD sprites (loader/res/hud: the ReJet HUD's artwork), in their own small texture */
+
+enum { SPR_CAN_FULL, SPR_CAN_EMPTY, SPR_TILE, SPR_PICT_BOOST, SPR_DIGITS, SPR_COUNT };
+static struct {
+    const WCHAR *res;
+    float canvas_h; /* the height drawn, in canvas units: the texture keeps it at screen size */
+    DWORD *px;      /* premultiplied BGRA, original size */
+    UINT w, h, aw, ah, ax, ay; /* original size; size and place in the sprite texture */
+} g_spr[SPR_COUNT] = {
+    {L"HUD_CAN_FULL", 64}, {L"HUD_CAN_EMPTY", 64}, {L"HUD_TILE", 60}, {L"HUD_PICT_BOOST", 60}, {L"HUD_DIGITS", 44},
+};
+#define SPR_TEX 1024
+static IDirect3DTexture9 *g_spr_tex;
+
+/* A PNG built into rejet.dll (RCDATA) as premultiplied BGRA. */
+static DWORD *decode_png(const WCHAR *name, UINT *w, UINT *h)
+{
+    IWICImagingFactory *wic = NULL;
+    IWICBitmapDecoder *dec = NULL;
+    IWICBitmapFrameDecode *frame = NULL;
+    IWICFormatConverter *conv = NULL;
+    IWICStream *stream = NULL;
+    HMODULE self = NULL;
+    HRSRC res;
+    HGLOBAL mem;
+    DWORD *px = NULL;
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)(void *)decode_png, &self);
+    if (self && (res = FindResourceW(self, name, (LPCWSTR)RT_RCDATA)) != NULL &&
+        (mem = LoadResource(self, res)) != NULL &&
+        SUCCEEDED(CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory,
+                                   (void **)&wic)) &&
+        SUCCEEDED(IWICImagingFactory_CreateStream(wic, &stream)) &&
+        SUCCEEDED(IWICStream_InitializeFromMemory(stream, (BYTE *)LockResource(mem), SizeofResource(self, res))) &&
+        SUCCEEDED(IWICImagingFactory_CreateDecoderFromStream(wic, (IStream *)stream, NULL,
+                                                             WICDecodeMetadataCacheOnDemand, &dec)) &&
+        SUCCEEDED(IWICBitmapDecoder_GetFrame(dec, 0, &frame)) &&
+        SUCCEEDED(IWICImagingFactory_CreateFormatConverter(wic, &conv)) &&
+        SUCCEEDED(IWICFormatConverter_Initialize(conv, (IWICBitmapSource *)frame, &GUID_WICPixelFormat32bppPBGRA,
+                                                 WICBitmapDitherTypeNone, NULL, 0.0, WICBitmapPaletteTypeCustom)) &&
+        SUCCEEDED(IWICBitmapSource_GetSize((IWICBitmapSource *)conv, w, h)) && *w && *h && *w <= 4096 &&
+        *h <= 4096 && (px = (DWORD *)malloc((size_t)*w * *h * 4)) != NULL &&
+        FAILED(IWICBitmapSource_CopyPixels((IWICBitmapSource *)conv, NULL, *w * 4, *w * *h * 4, (BYTE *)px))) {
+        free(px);
+        px = NULL;
+    }
+    if (conv)
+        IWICFormatConverter_Release(conv);
+    if (frame)
+        IWICBitmapFrameDecode_Release(frame);
+    if (dec)
+        IWICBitmapDecoder_Release(dec);
+    if (stream)
+        IWICStream_Release(stream);
+    if (wic)
+        IWICImagingFactory_Release(wic);
+    return px;
+}
+
+/* Box-filter premultiplied src (sw x sh) down to w x h, straight alpha out. */
+static void scale_box(const DWORD *src, UINT sw, UINT sh, DWORD *dst, UINT w, UINT h, UINT pitch)
+{
+    for (UINT y = 0; y < h; y++) {
+        UINT sy0 = y * sh / h, sy1 = (y + 1) * sh / h;
+        if (sy1 <= sy0)
+            sy1 = sy0 + 1;
+        for (UINT x = 0; x < w; x++) {
+            UINT sx0 = x * sw / w, sx1 = (x + 1) * sw / w, n = 0, acc[4] = {0, 0, 0, 0}, a;
+            if (sx1 <= sx0)
+                sx1 = sx0 + 1;
+            for (UINT sy = sy0; sy < sy1 && sy < sh; sy++)
+                for (UINT sx = sx0; sx < sx1 && sx < sw; sx++, n++)
+                    for (int k = 0; k < 4; k++)
+                        acc[k] += (src[sy * sw + sx] >> (8 * k)) & 0xFF;
+            n = n ? n : 1;
+            a = acc[3] / n;
+            dst[y * pitch + x] = a << 24 | (a ? (acc[2] / n) * 255 / a : 0) << 16 |
+                                 (a ? (acc[1] / n) * 255 / a : 0) << 8 | (a ? (acc[0] / n) * 255 / a : 0);
+        }
+    }
+}
+
+/* Pack the sprites at the size they are drawn (box-filtered, so they stay crisp) into g_spr_tex. */
+static void build_sprites(void)
+{
+    UINT x = 0, y = 0, row = 0;
+    D3DLOCKED_RECT lr;
+    if (g_spr_tex) {
+        IDirect3DTexture9_Release(g_spr_tex);
+        g_spr_tex = NULL;
+    }
+    for (int i = 0; i < SPR_COUNT; i++) {
+        if (!g_spr[i].px)
+            g_spr[i].px = decode_png(g_spr[i].res, &g_spr[i].w, &g_spr[i].h);
+        g_spr[i].ah = g_spr[i].px ? (UINT)(g_spr[i].canvas_h * g_scale * 1.25f + 0.5f) : 0;
+        if (g_spr[i].ah > g_spr[i].h)
+            g_spr[i].ah = g_spr[i].h;
+        g_spr[i].aw = g_spr[i].px ? (UINT)((float)g_spr[i].ah * g_spr[i].w / g_spr[i].h + 0.5f) : 0;
+        if (x + g_spr[i].aw + 2 > SPR_TEX) {
+            x = 0;
+            y += row + 2;
+            row = 0;
+        }
+        g_spr[i].ax = x;
+        g_spr[i].ay = y;
+        x += g_spr[i].aw + 2;
+        row = g_spr[i].ah > row ? g_spr[i].ah : row;
+    }
+    if (y + row > SPR_TEX ||
+        FAILED(IDirect3DDevice9Ex_CreateTexture(DEV, SPR_TEX, SPR_TEX, 1, D3DUSAGE_DYNAMIC, D3DFMT_A8R8G8B8,
+                                                D3DPOOL_DEFAULT, &g_spr_tex, NULL)))
+        return;
+    if (SUCCEEDED(IDirect3DTexture9_LockRect(g_spr_tex, 0, &lr, NULL, D3DLOCK_DISCARD))) {
+        for (int j = 0; j < SPR_TEX; j++)
+            memset((BYTE *)lr.pBits + (size_t)j * lr.Pitch, 0, SPR_TEX * 4);
+        for (int i = 0; i < SPR_COUNT; i++)
+            if (g_spr[i].px && g_spr[i].aw)
+                scale_box(g_spr[i].px, g_spr[i].w, g_spr[i].h,
+                          (DWORD *)((BYTE *)lr.pBits + (size_t)g_spr[i].ay * lr.Pitch) + g_spr[i].ax, g_spr[i].aw,
+                          g_spr[i].ah, (UINT)lr.Pitch / 4);
+        IDirect3DTexture9_UnlockRect(g_spr_tex, 0);
+    }
+}
+
 static int build_atlas(UINT bw, UINT bh)
 {
     static const struct { const WCHAR *face; int size, weight, italic; } fonts[FONT_COUNT] = {
@@ -424,6 +549,7 @@ static int build_atlas(UINT bw, UINT bh)
     }
     DeleteObject(bm);
     DeleteDC(dc);
+    build_sprites();
     return g_atlas != NULL;
 }
 
@@ -446,6 +572,56 @@ static float X(float x) { return g_ox + x * g_scale; }
 static float canvas_left(void) { return -g_ox / g_scale; }
 static float canvas_right(void) { return 1280.0f + g_ox / g_scale; }
 static float Y(float y) { return y * g_scale; }
+
+#define MAX_SPR_VERTS 1200
+static Vertex g_sv[MAX_SPR_VERTS]; /* HUD sprites, drawn after the batch with g_spr_tex */
+static int g_nsv;
+
+/* Part of sprite `id` (u0..u1 across it, 0..1) at (x, y) on the canvas, h tall; returns the width. */
+static float sprite_part(int id, float x, float y, float h, float u0, float u1, DWORD c)
+{
+    float w, tu0, tu1, tv0, tv1, px0, py0, px1, py1;
+    Vertex *v = g_sv + g_nsv;
+    if (id < 0 || id >= SPR_COUNT || !g_spr[id].aw || !g_spr_tex || g_nsv + 6 > MAX_SPR_VERTS)
+        return 0;
+    w = h * (float)g_spr[id].w / (float)g_spr[id].h * (u1 - u0);
+    tu0 = ((float)g_spr[id].ax + u0 * g_spr[id].aw) / SPR_TEX;
+    tu1 = ((float)g_spr[id].ax + u1 * g_spr[id].aw) / SPR_TEX;
+    tv0 = ((float)g_spr[id].ay + 0.5f) / SPR_TEX;
+    tv1 = ((float)(g_spr[id].ay + g_spr[id].ah) - 0.5f) / SPR_TEX;
+    px0 = X(x) - 0.5f;
+    py0 = Y(y) - 0.5f;
+    px1 = X(x + w) - 0.5f;
+    py1 = Y(y + h) - 0.5f;
+    c = with_alpha(c, g_fade);
+    v[0] = (Vertex){px0, py0, 0, 1, c, tu0, tv0};
+    v[1] = (Vertex){px1, py0, 0, 1, c, tu1, tv0};
+    v[2] = (Vertex){px0, py1, 0, 1, c, tu0, tv1};
+    v[3] = v[1];
+    v[4] = (Vertex){px1, py1, 0, 1, c, tu1, tv1};
+    v[5] = v[2];
+    g_nsv += 6;
+    return w;
+}
+
+static float sprite(int id, float x, float y, float h, DWORD c)
+{
+    return sprite_part(id, x, y, h, 0, 1, c);
+}
+
+/* A number in the HUD's digits (sprite strip: 0-9 then x), h tall; returns the width. */
+static float hud_number(const char *s, float x, float y, float h, DWORD c)
+{
+    float x0 = x;
+    for (; *s; s++) {
+        int k = *s >= '0' && *s <= '9' ? *s - '0' : *s == 'x' ? 10 : -1;
+        if (k >= 0)
+            x += sprite_part(SPR_DIGITS, x, y, h, k / 11.0f, (k + 1) / 11.0f, c) * 0.82f; /* glyphs sit close */
+        else
+            x += h * 0.3f;
+    }
+    return x - x0;
+}
 
 /* A quad in back-buffer pixels; `skew` shifts the top edge right (parallelograms). */
 static void quad_px(float x0, float y0, float x1, float y1, float skew, DWORD c, float u0, float v0, float u1, float v1)
@@ -670,6 +846,11 @@ static void flush(void)
     IDirect3DDevice9Ex_SetSamplerState(DEV, 0, D3DSAMP_SRGBTEXTURE, FALSE);
     IDirect3DDevice9Ex_BeginScene(DEV);
     IDirect3DDevice9Ex_DrawPrimitiveUP(DEV, D3DPT_TRIANGLELIST, (UINT)g_nv / 3, g_v, sizeof(Vertex));
+    if (g_nsv && g_spr_tex) { /* the HUD sprites, over the batch */
+        IDirect3DDevice9Ex_SetTexture(DEV, 0, (IDirect3DBaseTexture9 *)g_spr_tex);
+        IDirect3DDevice9Ex_DrawPrimitiveUP(DEV, D3DPT_TRIANGLELIST, (UINT)g_nsv / 3, g_sv, sizeof(Vertex));
+    }
+    g_nsv = 0;
     IDirect3DDevice9Ex_EndScene(DEV);
     g_nv = 0;
     IDirect3DStateBlock9_Apply(g_state);
@@ -2023,41 +2204,24 @@ static void draw_rejet_hud(void)
             box(x0, y1 - (y1 - y0) * 0.25f, xf, y1, 0, 0xFFD39A00u);
         }
     }
-    if (v.show_cans) { /* cans: the spray can, red when empty and yellow with cans, as the game's, and the count */
+    if (v.show_cans) { /* cans: the can (red when empty, yellow with cans, as the game's), the count in
+                        * the HUD's digits and, from 10 cans, the boost sign: a tile with a pictogram,
+                        * so other states can swap the pictogram later (loader/res/hud) */
         char s[16];
-        float cx1 = DX(1280 - 40), cy = DY(62);
-        DWORD body = v.cans > 0 ? 0xFFF2C21Au : 0xFFE0322Au, shade = v.cans > 0 ? 0xFFC99400u : 0xFFA82020u;
-        float tw, cx;
-        snprintf(s, sizeof s, "x %d", v.cans);
-        tw = text_width(FONT_ITEM, s);
-        cx = cx1 - tw - 46;
-        box(cx + 3, cy + 15, cx + 31, cy + 63, 0, 0x50000000u);
-        box(cx - 2, cy + 10, cx + 28, cy + 60, 0, 0xFF1A1A1Au);
-        box(cx, cy + 12, cx + 26, cy + 58, 0, body);
-        box(cx + 17, cy + 12, cx + 26, cy + 58, 0, shade);
-        box(cx + 5, cy + 18, cx + 9, cy + 46, 0, 0x90FFFFFFu); /* the shine */
-        box(cx + 5, cy + 2, cx + 21, cy + 11, 0, 0xFF1A1A1Au);
-        box(cx + 7, cy + 4, cx + 19, cy + 10, 0, 0xFFC8C8C8u);
-        outlined_text(FONT_ITEM, cx1, cy + 12, 2, C_WHITE, s);
-        if (v.cans >= 10) { /* boost ready: the game's yellow skater sign, left of the can */
-            float bx1 = cx - 16, bx0 = bx1 - 56, by0 = cy + 6, by1 = by0 + 56;
+        float cx1 = DX(1280 - 40), cy = DY(62), dh = 44, cw, x;
+        snprintf(s, sizeof s, "x%d", v.cans);
+        x = cx1 - hud_number(s, -10000, 0, dh, 0) - 6; /* measure (off screen), then draw right-aligned */
+        g_nsv -= 6 * (int)strlen(s);
+        hud_number(s, x, cy + 12, dh, C_WHITE);
+        cw = sprite(v.cans > 0 ? SPR_CAN_FULL : SPR_CAN_EMPTY, -10000, 0, 64, C_WHITE);
+        g_nsv -= 6;
+        sprite(v.cans > 0 ? SPR_CAN_FULL : SPR_CAN_EMPTY, x - cw - 6, cy, 64, C_WHITE);
+        if (v.cans >= 10) { /* boost ready, with a gentle pulse */
             float pulse = 0.5f + 0.5f * sinf((float)(now_ms() / 1000.0) * 6.2831853f / 0.8f);
-            box(bx0 + 3, by0 + 4, bx1 + 4, by1 + 5, 0, 0x50000000u);
-            box(bx0 - 2.5f, by0 - 2.5f, bx1 + 2.5f, by1 + 2.5f, 0, 0xFF1A1A1Au);
-            box(bx0, by0, bx1, by1, 0, mix(0xFFF2B705u, 0xFFFFD34Du, pulse));
-            box(bx0, by1 - 10, bx1, by1, 0, 0xFFD39A00u);
-            { /* a skater leaning into a boost: head, body, arm and legs as strokes */
-                float hx = bx0 + 18, hy = by0 + 16;
-                for (int k = 0; k < 12; k++) {
-                    float a0 = k * 6.2831853f / 12, a1 = (k + 1) * 6.2831853f / 12;
-                    stroke(hx + 5 * cosf(a0), hy + 5 * sinf(a0), hx + 5 * cosf(a1), hy + 5 * sinf(a1), 4.5f, 0xFF1A1A1Au);
-                }
-                stroke(hx + 6, hy + 6, bx0 + 34, by0 + 30, 5, 0xFF1A1A1Au);  /* body */
-                stroke(hx + 8, hy + 10, bx0 + 42, by0 + 16, 4, 0xFF1A1A1Au); /* arm forward */
-                stroke(bx0 + 34, by0 + 30, bx0 + 24, by0 + 44, 4.5f, 0xFF1A1A1Au); /* back leg */
-                stroke(bx0 + 34, by0 + 30, bx0 + 46, by0 + 42, 4.5f, 0xFF1A1A1Au); /* front leg */
-                stroke(bx0 + 40, by0 + 44, bx0 + 50, by0 + 44, 3.5f, 0xFF1A1A1Au); /* skate */
-            }
+            float bx = x - cw - 18 - 60, by = cy + 2;
+            DWORD tint = mix(0xFFFFFFFFu, 0xFFFFF0C0u, pulse);
+            sprite(SPR_TILE, bx, by, 60, tint);
+            sprite(SPR_PICT_BOOST, bx, by, 60, C_WHITE);
         }
     }
     if (v.show_speed) { /* speed: the game's wedge at the bottom right; the fill is a gradient along it, purple at

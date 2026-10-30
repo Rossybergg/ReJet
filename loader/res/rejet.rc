@@ -2,6 +2,13 @@
  * and setup windows (the exe's own resources are gone once the XBE is mapped over its image)
  * and the version. */
 REJET_LOGO RCDATA "rejet_logo.png"
+/* The ReJet HUD's artwork (HUD: ReJet; ui/menu.c draw_rejet_hud), made for ReJet in the game's
+ * style, not taken from it. */
+HUD_CAN_FULL RCDATA "hud/hud_can_full.png"
+HUD_CAN_EMPTY RCDATA "hud/hud_can_empty.png"
+HUD_TILE RCDATA "hud/hud_tile.png"
+HUD_PICT_BOOST RCDATA "hud/hud_pict_boost.png"
+HUD_DIGITS RCDATA "hud/hud_digits.png"
 1 ICON "rejet.ico"
 
 #define REJET_FILE_DESC "ReJet loader library"
