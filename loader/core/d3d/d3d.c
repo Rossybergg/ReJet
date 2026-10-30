@@ -1898,14 +1898,46 @@ static D3DTRANSFORMSTATETYPE host_transform(DWORD s)
 typedef void(XBAPI *SetProjectionFn)(void *self, int fov, float zn, float zf);
 static SetProjectionFn g_orig_set_projection;
 
+/* The game's front-end and pause screens (the load screen, character select, the map) are 3D
+ * sets built for a 4:3 view: widened, their unfinished edges show. Their code is one block,
+ * 0x110000-0x11FFFF, and it is on the stack when they set their camera; gameplay's never is
+ * (captures 10-30). Those frames are drawn as the original 4:3 picture stretched to fill:
+ * no Hor+ widening and no 2D squeeze. The Now Loading screen sets its camera from its own
+ * FUN_00066D10, seen only before the intro and before a stage loads. */
+#define MENU_CODE_START 0x00110000u
+#define MENU_CODE_END 0x00120000u
+#define LOADING_CAMERA_START 0x00066D10u
+#define LOADING_CAMERA_END 0x00066DA6u
+static ULONG g_menu_frame = (ULONG)-10; /* the last frame a menu screen set its camera */
+
+static int menu_on_stack(void)
+{
+    static __declspec(thread) const DWORD *stack_top; /* the end of this thread's stack region */
+    const DWORD *sp = (const DWORD *)_AddressOfReturnAddress(), *end = sp + 4096;
+    if (!stack_top) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery(sp, &mi, sizeof mi))
+            stack_top = (const DWORD *)((const BYTE *)mi.BaseAddress + mi.RegionSize);
+    }
+    if (stack_top && end > stack_top)
+        end = stack_top;
+    for (; sp < end; sp++)
+        if ((*sp >= MENU_CODE_START && *sp < MENU_CODE_END) ||
+            (*sp >= LOADING_CAMERA_START && *sp < LOADING_CAMERA_END))
+            return 1;
+    return 0;
+}
+
 static float widescreen_k(void)
 {
+    if (g_frame - g_menu_frame <= 1) /* a menu screen: stretched 4:3 */
+        return 1.0f;
     return ws_k(g_hw, g_hh);
 }
 
 static void XBAPI hook_set_projection(void *self, int fov, float zn, float zf)
 {
-    float *planes = (float *)(UINT_PTR)CULL_PLANES, k = widescreen_k();
+    float *planes = (float *)(UINT_PTR)CULL_PLANES, k = ws_k(g_hw, g_hh); /* always wide: no pop-in after a menu */
     g_orig_set_projection(self, fov, zn, zf);
     {
         static int logged;
@@ -1943,8 +1975,14 @@ static void widescreen_projection(D3DMATRIX *m)
 
 static HRESULT XBAPI hle_D3DDevice_SetTransform(DWORD State, const D3DMATRIX *pMatrix)
 {
-    if (State == 1 && pMatrix)
+    if (State == 1 && pMatrix) {
+        if (menu_on_stack()) {
+            if (g_frame - g_menu_frame > 60)
+                log_printf("widescreen: menu screen at frame %lu: stretched 4:3\n", g_frame);
+            g_menu_frame = g_frame;
+        }
         widescreen_projection((D3DMATRIX *)pMatrix); /* game memory */
+    }
     if (State < 10 && pMatrix) {
         static LONG logged[10];
         if (InterlockedIncrement(&logged[State]) <= 3)

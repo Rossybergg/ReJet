@@ -64,7 +64,7 @@ Press **F1**, or **Back and Start together** on a controller, at any time. The g
 ## What's new compared with the Xbox
 
 - **Any resolution**, up to 4K: much sharper than the Xbox's 640×480, changed live from the menu.
-- **Widescreen** in 16:10, 16:9 or 21:9. You see more of the city at the sides rather than a stretched picture, and the HUD keeps its proper shape.
+- **Widescreen** in 16:10, 16:9 or 21:9. You see more of the city at the sides rather than a stretched picture, and the HUD keeps its proper shape. Menu and loading screens, built only for 4:3, are stretched to fill the screen.
 - **Full screen or a window**, at whatever size you like, sharp on high-DPI screens.
 - **Anti-aliasing** (2x, 4x or 8x MSAA) for smooth edges on the outlines and the city.
 - **Sharper textures** with anisotropic filtering (great on floors and roads at an angle).
