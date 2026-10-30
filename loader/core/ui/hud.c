@@ -27,6 +27,18 @@ ULONG d3d_frame(void); /* d3d.c */
 static int g_hide = -1; /* REJET_HUDHIDE=1: leave out the original HUD; =cycle: one method at a time */
 static const DWORD HUD_METHODS[] = {0x1080A0, 0x10DEA0, 0x106AD0, 0x105A90, 0x10E680, 0x10A590};
 static HudValues g_values;
+
+/* The HUD-visibility flags of the player a HUD node belongs to, as its draw method reads them:
+ * player = *(manager + 0x98 + index * 4), manager at 0x236580 (FUN_00012890); flags at player
+ * + 0x16AC. Health shows when bit 31 is set, cans with 0x4000000, the speed meter with 0x2000000. */
+static DWORD player_flags(int index)
+{
+    const unsigned char *manager = *(const unsigned char *const *)(UINT_PTR)0x236580, *player;
+    if (!manager || index < 0)
+        return 0;
+    player = *(const unsigned char *const *)(manager + 0x98 + (UINT_PTR)index * 4);
+    return player ? *(const DWORD *)(player + 0x16AC) : 0;
+}
 static ULONG g_values_frame = (ULONG)-10; /* when the health node last drew */
 static DWORD g_seen[256];
 static unsigned g_nseen;
@@ -131,16 +143,19 @@ static void __fastcall hud_draw_tree(unsigned char *node)
             if (draw == 0x10DEA0) { /* speed: current (+0x1D0, clamped) over the maximum (+0x1D4), as its update (0x10DDA0) */
                 float top = *(const float *)(node + 0x1D4);
                 g_values.speed = top > 0 ? *(const float *)(node + 0x1D0) / top : 0;
+                g_values.show_speed = (player_flags(*(const int *)(node + 0x1D8)) & 0x2000000u) != 0;
             }
             if (draw == 0x106AD0) { /* health: the fill quad (+0xA8..+0xC0) over the background (+0x48..+0x60) */
                 float bg = *(const float *)(node + 0x60) - *(const float *)(node + 0x48);
                 float fill = *(const float *)(node + 0xC0) - *(const float *)(node + 0xA8);
                 g_values.health = bg > 0 ? fill / bg : 0;
+                g_values.show_health = (player_flags(*(const int *)(node + 0x2B4)) & 0x80000000u) != 0;
                 g_values_frame = d3d_frame();
             }
             else if (draw == 0x10E680) { /* cans held, and the cap */
                 g_values.cans = *(const int *)(node + 0xB8);
                 g_values.cans_max = *(const int *)(node + 0xD8);
+                g_values.show_cans = (player_flags(*(const int *)(node + 0x100)) & 0x4000000u) != 0;
             }
             /* HUD: ReJet draws its own health, cans and speed meter (menu.c) */
             if (g_settings.hud_style == 1 && (draw == 0x106AD0 || draw == 0x10E680 || draw == 0x10DEA0))

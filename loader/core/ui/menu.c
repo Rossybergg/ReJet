@@ -2009,7 +2009,7 @@ static void draw_rejet_hud(void)
     if (g_settings.hud_style != 1 || !hud_values(&v))
         return;
     g_fade = 1;
-    { /* health: a gold bar */
+    if (v.show_health) { /* health: a gold bar */
         float x1 = DX(1280 - 40), x0 = x1 - DW(300), y0 = DY(32), y1 = y0 + DY(16);
         float f = v.health < 0 ? 0 : v.health > 1 ? 1 : v.health, xf = x0 + (x1 - x0) * f;
         box(x0 + 3, y0 + 4, x1 + 4, y1 + 5, 0, 0x50000000u);
@@ -2021,7 +2021,7 @@ static void draw_rejet_hud(void)
             box(x0, y1 - (y1 - y0) * 0.25f, xf, y1, 0, 0xFFD39A00u);
         }
     }
-    { /* cans: the spray can, red when empty and yellow with cans, as the game's, and the count */
+    if (v.show_cans) { /* cans: the spray can, red when empty and yellow with cans, as the game's, and the count */
         char s[16];
         float cx1 = DX(1280 - 40), cy = DY(62);
         DWORD body = v.cans > 0 ? 0xFFF2C21Au : 0xFFE0322Au, shade = v.cans > 0 ? 0xFFC99400u : 0xFFA82020u;
@@ -2038,7 +2038,7 @@ static void draw_rejet_hud(void)
         box(cx + 7, cy + 4, cx + 19, cy + 10, 0, 0xFFC8C8C8u);
         outlined_text(FONT_ITEM, cx1, cy + 12, 2, C_WHITE, s);
     }
-    { /* speed: the game's wedge at the bottom right; the fill is a gradient along it, purple at
+    if (v.show_speed) { /* speed: the game's wedge at the bottom right; the fill is a gradient along it, purple at
        * the slow end to red at the fast end, as the game's, with a thin dark outline */
         const DWORD slow = 0xFF5A3CD2u, fast = 0xFFFF3B3Bu;
         float x1 = DX(1280 - 40), x0 = x1 - DW(260), y1 = DY(720 - 40), y0 = y1 - DY(30);

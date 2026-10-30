@@ -11,6 +11,7 @@ typedef struct HudValues {
     float health; /* 0..1: the original bar's fill over its background */
     int cans, cans_max;
     float speed; /* 0..1: the speed meter (full when boosting) */
+    int show_health, show_cans, show_speed; /* the game's own visibility flags (hidden in story scenes) */
 } HudValues;
 
 /* The values, and 1 while the game is drawing its gameplay HUD (not on the map or in cutscenes). */
