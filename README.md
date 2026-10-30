@@ -14,7 +14,7 @@ It works a bit like a translator. Xbox games are 32-bit x86 programs, just like 
 
 | | |
 |---|---|
-| ![Skating in the GG's Garage in widescreen](docs/images/gameplay.png) | ![A cutscene with a speech bubble](docs/images/dialogue.png) |
+| ![Skating in widescreen with the ReJet HUD](docs/images/gameplay.png) | ![A cutscene with a speech bubble](docs/images/dialogue.png) |
 | ![The title menu](docs/images/title.png) | ![The map screen](docs/images/map.png) |
 | ![The ReJet menu](docs/images/rejet-menu.png) | ![The ReJet menu's display settings](docs/images/rejet-display.png) |
 | ![First-time setup](docs/images/setup.png) | |
