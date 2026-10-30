@@ -94,7 +94,7 @@ Phase 1 first: a baseline before AA changes the cost of every frame, and the gat
 Finish the single-player ReJet HUD before any multiplayer or split-screen work. Done: health, cans and the boost sign, speed meter, score, trick combos, "N TRICKS", tags done / total (docs/HUD.md). Still to do in single player, in order:
 
 1. ~~**Graffiti soul pickup**~~ done 2026-10-30: one centred "GET No. N" replaces the 3D title (0xFBD40) and the popup (0x1054D0).
-2. **The spray / tag gauge** (0x107300, drawn while tagging): restyle or keep the game's.
+2. ~~**The spray / tag gauge**~~ (0x107300, drawn while tagging): kept as the game's (user, 2026-10-30: drawn in the 3D scene and scales cleanly).
 3. **Unknown nodes** seen in play: 0x101BC0 (with can pickups), 0x1017A0 and 0x105A90 (3D-drawn): identify each and decide redraw or keep.
 4. **The tile pictograms in use**: find the game states they stand for (alert, bombs, skull, bolt, ball, runner) and show them on the tile.
 5. **Races and timed modes**: ~~timer~~ done 2026-10-30 (0x10F640). Still to see: the finish-screen time, and races with laps or positions (LAP and ST / ND / RD / TH words are ready).
@@ -107,7 +107,7 @@ Finish the single-player ReJet HUD before any multiplayer or split-screen work. 
 Not blocking alpha 5: any HUD piece ReJet doesn't redraw yet shows the game's own, so the game stays fully playable.
 
 Single-player ReJet HUD (finish before any split screen):
-1. The spray / tag gauge (0x107300): restyle or keep.
+1. ~~The spray / tag gauge (0x107300)~~: kept, the game's own draws cleanly at any resolution (user, 10-30).
 2. Unknown HUD nodes: 0x101BC0 (with can pickups), 0x1017A0 and 0x105A90 (3D-drawn): identify, then redraw or keep.
 3. The yellow tile's other states: find what the alert, bombs, skull, bolt, ball and runner pictograms stand for in the game and show them (artwork is in).
 4. Races: the finish-screen time, and races with laps or positions (LAP and ST / ND / RD / TH words are ready).
@@ -117,7 +117,7 @@ Single-player ReJet HUD (finish before any split screen):
 Release gate and setup:
 7. The gate's scripted route only reaches the title's attract demo: give it its own save and HDD folder (not the user's) that loads straight into a stage, and re-baseline.
 8. Test fresh default settings in the gate (a positional defaults list shipped Japanese and HudEdges in 0.4.0/0.4.1 test builds).
-9. Extract the game to a shared folder (%LOCALAPPDATA%\rejet\Game, beside the saves) so new versions skip setup.
+9. ~~Extract the game to a shared folder~~ (done in 0.5.0) (%LOCALAPPDATA%\rejet\Game, beside the saves) so new versions skip setup.
 
 Split screen for the ReJet HUD comes after all of the single-player items.
 
