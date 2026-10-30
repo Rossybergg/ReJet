@@ -1904,12 +1904,18 @@ static SetProjectionFn g_orig_set_projection;
  * 0x110000-0x11FFFF, and it is on the stack when they set their camera; gameplay's never is
  * (captures 10-30). Those frames are drawn as the original 4:3 picture stretched to fill:
  * no Hor+ widening and no 2D squeeze. The Now Loading screen sets its camera from its own
- * FUN_00066D10, seen only before the intro and before a stage loads. */
+ * FUN_00066D10, seen only before the intro and before a stage loads. Only the nearest game
+ * callers count: deeper, the stack holds stale values, and gameplay matched one every ~2.4 s
+ * (a camera jerk as it flicked to 4:3). */
+#define GAME_CODE_START 0x00011000u
+#define GAME_CODE_END 0x0013B010u
+#define MENU_CALLER_DEPTH 3
 #define MENU_CODE_START 0x00110000u
 #define MENU_CODE_END 0x00120000u
 #define LOADING_CAMERA_START 0x00066D10u
 #define LOADING_CAMERA_END 0x00066DA6u
 static ULONG g_menu_frame = (ULONG)-10; /* the last frame a menu screen set its camera */
+static DWORD g_menu_code;                /* the menu code that set it (logged) */
 
 static int menu_on_stack(void)
 {
@@ -1922,10 +1928,24 @@ static int menu_on_stack(void)
     }
     if (stack_top && end > stack_top)
         end = stack_top;
-    for (; sp < end; sp++)
+    for (int n = 0; sp < end; sp++) { /* n: game-code values passed, nearest caller first */
+        if (*sp < GAME_CODE_START || *sp >= GAME_CODE_END)
+            continue;
         if ((*sp >= MENU_CODE_START && *sp < MENU_CODE_END) ||
-            (*sp >= LOADING_CAMERA_START && *sp < LOADING_CAMERA_END))
-            return 1;
+            (*sp >= LOADING_CAMERA_START && *sp < LOADING_CAMERA_END)) {
+            static ULONG logged_frame = (ULONG)-100;
+            if (n < MENU_CALLER_DEPTH) {
+                g_menu_code = *sp;
+                return 1;
+            }
+            if (g_frame - logged_frame > 60) { /* stale stack values: gameplay's camera jerks (10-30) */
+                logged_frame = g_frame;
+                log_printf("widescreen: ignored menu code %08X, caller %d, at frame %lu\n", (unsigned)*sp, n, g_frame);
+            }
+            return 0;
+        }
+        n++;
+    }
     return 0;
 }
 
@@ -1979,7 +1999,8 @@ static HRESULT XBAPI hle_D3DDevice_SetTransform(DWORD State, const D3DMATRIX *pM
     if (State == 1 && pMatrix) {
         if (menu_on_stack()) {
             if (g_frame - g_menu_frame > 60)
-                log_printf("widescreen: menu screen at frame %lu: stretched 4:3\n", g_frame);
+                log_printf("widescreen: menu screen at frame %lu (code %08X): stretched 4:3\n", g_frame,
+                           (unsigned)g_menu_code);
             g_menu_frame = g_frame;
         }
         widescreen_projection((D3DMATRIX *)pMatrix); /* game memory */
@@ -2891,9 +2912,16 @@ static int squeeze_2d_draw(const BYTE *verts, UINT first, UINT last, UINT stride
         if (g_vp_partial) { /* the Xbox viewport, which programs get from c-38/c-37 */
             float vsx = g_xvp.Width / (float)g_tw, vox = (2.0f * g_xvp.X + g_xvp.Width) / g_tw - 1.0f;
             float vsy = g_xvp.Height / (float)g_th, voy = 1.0f - (2.0f * g_xvp.Y + g_xvp.Height) / g_th;
+            static DWORD logged_w, logged_h;
             for (int r = 0; r < 4; r++) {
                 p.m[r][0] = p.m[r][0] * vsx + p.m[r][3] * vox;
                 p.m[r][1] = p.m[r][1] * vsy + p.m[r][3] * voy;
+            }
+            if (g_xvp.Width != logged_w || g_xvp.Height != logged_h) {
+                logged_w = g_xvp.Width;
+                logged_h = g_xvp.Height;
+                log_printf("d3d: viewport %lu,%lu %lux%lu applied to fixed-function draws at frame %lu\n", g_xvp.X, g_xvp.Y,
+                           g_xvp.Width, g_xvp.Height, g_frame);
             }
         }
         if (g_capture_log && g_frame == g_capture_frame && p._34 == 0.0f) /* where 2D lands */
