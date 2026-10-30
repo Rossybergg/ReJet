@@ -483,6 +483,29 @@ static void tri(float ax, float ay, float bx, float by, float cx, float cy, DWOR
     g_nv += 3;
 }
 
+/* A triangle with a colour per corner (blended across it): the HUD's gradients. */
+static void tri3(float ax, float ay, DWORD ca, float bx, float by, DWORD cb, float cx, float cy, DWORD cc)
+{
+    Vertex *v = g_v + g_nv;
+    if (g_nv + 3 > MAX_VERTS)
+        return;
+    v[0] = (Vertex){X(ax) - 0.5f, Y(ay) - 0.5f, 0, 1, with_alpha(ca, g_fade), g_white_u, g_white_v};
+    v[1] = (Vertex){X(bx) - 0.5f, Y(by) - 0.5f, 0, 1, with_alpha(cb, g_fade), g_white_u, g_white_v};
+    v[2] = (Vertex){X(cx) - 0.5f, Y(cy) - 0.5f, 0, 1, with_alpha(cc, g_fade), g_white_u, g_white_v};
+    g_nv += 3;
+}
+
+/* A colour between a and b (0..1), alpha from a. */
+static DWORD mix(DWORD a, DWORD b, float f)
+{
+    DWORD r = 0;
+    for (int sh = 0; sh < 24; sh += 8) {
+        float ca = (float)(a >> sh & 0xFF), cb = (float)(b >> sh & 0xFF);
+        r |= (DWORD)(ca + (cb - ca) * f + 0.5f) << sh;
+    }
+    return r | (a & 0xFF000000u);
+}
+
 static float text_width(int font, const char *s)
 {
     float w = 0;
@@ -2015,16 +2038,20 @@ static void draw_rejet_hud(void)
         box(cx + 7, cy + 4, cx + 19, cy + 10, 0, 0xFFC8C8C8u);
         outlined_text(FONT_ITEM, cx1, cy + 12, 2, C_WHITE, s);
     }
-    { /* speed: the game's wedge at the bottom right, filling blue to red with speed */
+    { /* speed: the game's wedge at the bottom right; the fill is a gradient along it, purple at
+       * the slow end to red at the fast end, as the game's, with a thin dark outline */
+        const DWORD slow = 0xFF5A3CD2u, fast = 0xFFFF3B3Bu;
         float x1 = DX(1280 - 40), x0 = x1 - DW(260), y1 = DY(720 - 40), y0 = y1 - DY(30);
         float f = v.speed < 0 ? 0 : v.speed > 1 ? 1 : v.speed, xf = x0 + (x1 - x0) * f;
         float yf = y1 - (y1 - y0) * f;
-        DWORD r = (DWORD)(0x2A + (0xFF - 0x2A) * f), g = (DWORD)(0x58 + (0x3B - 0x58) * f), b = (DWORD)(0xD6 + (0x3B - 0xD6) * f);
+        DWORD cf = mix(slow, fast, f);
         tri(x0 + 4, y1 + 5, x1 + 5, y0 + 4, x1 + 5, y1 + 5, 0x50000000u);
-        tri(x0 - 5, y1 + 2.5f, x1 + 2.5f, y0 - 3.5f, x1 + 2.5f, y1 + 2.5f, 0xFF1A1A1Au);
         tri(x0, y1, x1, y0, x1, y1, 0xFF5E6264u);
         if (f > 0)
-            tri(x0, y1, xf, yf, xf, y1, 0xFF000000u | r << 16 | g << 8 | b);
+            tri3(x0, y1, slow, xf, yf, cf, xf, y1, cf);
+        stroke(x0, y1, x1, y0, 2.5f, 0xFF1A1A1Au); /* the outline, as the health bar's */
+        stroke(x1, y0, x1, y1, 2.5f, 0xFF1A1A1Au);
+        stroke(x0, y1, x1, y1, 2.5f, 0xFF1A1A1Au);
     }
     g_fade = saved;
 }

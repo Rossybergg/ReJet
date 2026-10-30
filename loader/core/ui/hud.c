@@ -74,6 +74,47 @@ static void log_values(DWORD draw, const unsigned char *node)
     }
 }
 
+/* REJET_HUDLOG=1 also logs which HUD-module methods draw, whenever that set changes from one
+ * frame to the next (to find state-dependent pieces, such as the boost icon from 10 cans). */
+static void log_active(DWORD draw)
+{
+    static int on = -1;
+    static ULONG frame;
+    static DWORD now[16], prev[16];
+    static unsigned nnow, nprev;
+    if (on < 0) {
+        char env[4] = "";
+        on = GetEnvironmentVariableA("REJET_HUDLOG", env, sizeof env) && env[0] == '1';
+    }
+    if (!on || draw < HUD_CODE_START || draw >= HUD_CODE_END)
+        return;
+    if (d3d_frame() != frame) { /* a new frame: compare the last one with the one before */
+        int same = nnow == nprev;
+        for (unsigned i = 0; same && i < nnow; i++) {
+            unsigned k = 0;
+            while (k < nprev && prev[k] != now[i])
+                k++;
+            same = k < nprev;
+        }
+        if (!same) {
+            char line[256];
+            int n = snprintf(line, sizeof line, "hud: drawing (cans %d)", g_values.cans);
+            for (unsigned i = 0; i < nnow && n < (int)sizeof line - 12; i++)
+                n += snprintf(line + n, sizeof line - n, " %06lX", now[i]);
+            log_printf("%s\n", line);
+        }
+        memcpy(prev, now, sizeof now);
+        nprev = nnow;
+        nnow = 0;
+        frame = d3d_frame();
+    }
+    for (unsigned i = 0; i < nnow; i++)
+        if (now[i] == draw)
+            return;
+    if (nnow < 16)
+        now[nnow++] = draw;
+}
+
 static void __fastcall hud_draw_tree(unsigned char *node)
 {
     if (g_hide < 0) {
@@ -85,6 +126,7 @@ static void __fastcall hud_draw_tree(unsigned char *node)
             DWORD draw = (*(DWORD **)node)[3];
             note(draw, node);
             log_values(draw, node);
+            log_active(draw);
             int skip = g_hide == 1 && draw >= HUD_CODE_START && draw < HUD_CODE_END;
             if (draw == 0x10DEA0) { /* speed: current (+0x1D0, clamped) over the maximum (+0x1D4), as its update (0x10DDA0) */
                 float top = *(const float *)(node + 0x1D4);
