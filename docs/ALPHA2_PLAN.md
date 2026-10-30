@@ -101,3 +101,20 @@ Finish the single-player ReJet HUD before any multiplayer or split-screen work. 
 6. Check the map screen (area name, 0x1080A0) and story scenes still hide or show the right pieces.
 
 **Then split screen** (multiplayer): the per-viewport walkers (0x11680 etc.), the HUD values per player index, and a multiplayer test setup.
+
+## After 0.4.2 (alpha 4 released 2026-10-30): what's left before alpha 5
+
+Single-player ReJet HUD (finish before any split screen):
+1. The spray / tag gauge (0x107300): restyle or keep.
+2. Unknown HUD nodes: 0x101BC0 (with can pickups), 0x1017A0 and 0x105A90 (3D-drawn): identify, then redraw or keep.
+3. The yellow tile's other states: find what the alert, bombs, skull, bolt, ball and runner pictograms stand for in the game and show them (artwork is in).
+4. Races: the finish-screen time, and races with laps or positions (LAP and ST / ND / RD / TH words are ready).
+5. Check the map screen and story scenes.
+6. The occasional game soul text beside ReJet's (known issue; catch it with REJET_HUDLOG).
+
+Release gate and setup:
+7. The gate's scripted route only reaches the title's attract demo: give it its own save and HDD folder (not the user's) that loads straight into a stage, and re-baseline.
+8. Test fresh default settings in the gate (a positional defaults list shipped Japanese and HudEdges in 0.4.0/0.4.1 test builds).
+9. Extract the game to a shared folder (%LOCALAPPDATA%\rejet\Game, beside the saves) so new versions skip setup.
+
+Then **alpha 5**: widescreen for the loading screen, character select and the pause menu's map. After that, the ReJet HUD in split screen.
