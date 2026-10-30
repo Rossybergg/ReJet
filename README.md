@@ -106,6 +106,7 @@ The full list lives in [docs/ENHANCEMENTS.md](docs/ENHANCEMENTS.md).
 - A few flickering dark patches on grind rails in the intro fly-through.
 - Mostly tested in the first part of the game; later levels, local multiplayer and custom soundtracks haven't been tried yet.
 - 60 fps only, as on the Xbox.
+- With the ReJet HUD, the game's own "GET No." text for a graffiti soul may sometimes still show alongside ReJet's. If you see it, please report it (ReJet menu > Report a bug) while it's on screen.
 - The ReJet HUD is single player only for now. In local multiplayer (split screen), use the Classic HUD; ReJet's will come once the single-player HUD is finished.
 
 The current list is in [docs/KNOWN_BUGS.md](docs/KNOWN_BUGS.md).
