@@ -2781,7 +2781,7 @@ static int fvf_texcoord_offset(DWORD fvf, unsigned set)
  * an orthographic projection (a narrowed host projection). Render targets aren't touched. */
 static float g_squeeze = 1.0f; /* this draw's squeeze for pre-transformed vertices (1 = none) */
 
-static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
+static int squeeze_2d_draw(const BYTE *verts, UINT first, UINT last, UINT stride)
 {
     float k = widescreen_k(), mn = 1e30f, mx = -1e30f, sq, c[4] = {1.0f, 0.0f, 0.0f, 1.0f}; /* 2D scale, then unused */
     int fvf = !(g_cur_vs & 1), rhw = fvf && (g_cur_vs & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
@@ -2798,11 +2798,11 @@ static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
                 c[0] = 1.0f / k;
         }
         IDirect3DDevice9Ex_SetVertexShaderConstantF(g_dev, VSH_C_2D, c, 1);
-        return;
+        return c[0] != 1.0f;
     }
     if (rhw) {
         if (k <= 1.01f || g_cur_rt || !verts)
-            return;
+            return 0;
         for (UINT v = first; v <= last; v++) {
             float x = *(const float *)(verts + (SIZE_T)v * stride);
             mn = x < mn ? x : mn;
@@ -2810,14 +2810,14 @@ static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
         }
         if (!(mn <= 2.0f && mx >= (float)g_xw - 2.0f))
             g_squeeze = 1.0f / k;
-        return;
+        return g_squeeze != 1.0f;
     }
     { /* fixed-function geometry: only orthographic projections are 2D */
         D3DMATRIX p = g_xform[1], wvp;
         const D3DMATRIX *w = &g_xform[6], *vw = &g_xform[0];
         const float pivot = 0.0f; /* clip-space x: the centre */
         if (!(g_xform_set & 2))
-            return;
+            return 0;
         sq = 1.0f;
         if (k > 1.01f && !g_cur_rt && verts && p._34 == 0.0f && p._44 != 0.0f) {
             /* clip-space x extent through world, view and projection */
@@ -2851,6 +2851,33 @@ static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
         if (g_capture_log && g_frame == g_capture_frame && p._34 == 0.0f) /* where 2D lands */
             fprintf(g_capture_log, "      squeeze: x %.3f..%.3f, scale %.3f, projection _31 %.3f\n", mn, mx, sq, p._31);
         IDirect3DDevice9Ex_SetTransform(g_dev, D3DTS_PROJECTION, &p);
+        return sq != 1.0f;
+    }
+}
+
+/* Squeezed 2D is also clipped to the middle 4:3, the original screen's edges: the game's 2D
+ * screens assume anything past them is hidden (the load screen's sliding stripes, character
+ * select's neighbouring preview, the map's scrolling mission text). Full-width 2D and 3D aren't
+ * clipped. The scissor is combined with the viewport's (split screen). */
+static void squeeze_2d(const BYTE *verts, UINT first, UINT last, UINT stride)
+{
+    static int clipped;
+    int squeezed = squeeze_2d_draw(verts, first, last, stride);
+    if (squeezed) {
+        float k = widescreen_k();
+        RECT r = g_vp_partial ? g_vp_rect : (RECT){0, 0, (LONG)g_hw, (LONG)g_hh};
+        LONG band = (LONG)((float)g_hw / k + 0.5f), left = ((LONG)g_hw - band) / 2;
+        r.left = r.left > left ? r.left : left;
+        r.right = r.right < left + band ? r.right : left + band;
+        IDirect3DDevice9Ex_SetScissorRect(g_dev, &r);
+        IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_SCISSORTESTENABLE, TRUE);
+        clipped = 1;
+    }
+    else if (clipped) { /* back to the viewport's own clipping */
+        if (g_vp_partial)
+            IDirect3DDevice9Ex_SetScissorRect(g_dev, &g_vp_rect);
+        IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_SCISSORTESTENABLE, g_vp_partial ? TRUE : FALSE);
+        clipped = 0;
     }
 }
 
