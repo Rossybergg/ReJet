@@ -21,9 +21,9 @@ The window title lists them. Each shows a short confirmation in the top left cor
 
 | Key | What it does | Where it goes |
 |---|---|---|
-| **F12** | Screenshot | `Screenshots\jsrf_<date>_<time>.bmp` |
+| **F12** | Screenshot of what's on screen: the game, ReJet's HUD and messages, or the ReJet menu | `Screenshots\jsrf_<date>_<time>.bmp` |
 | **F11** | **Bug capture** of the next frame: screenshot, every draw call with its state (and the raw vertices of small draws), screen clears, materials and lights, each off-screen render texture as an image, and a summary with the Xbox render-state array | `captures\capture_NNN_<date>_<time>\` (`screen.bmp`, `draws.txt`, `rendertarget*.bmp`, `info.txt`) |
-| **F9** | **Screenshot burst**: every 4th frame for 4 seconds (60 images), to study an animation (works in menus too; F12 also captures the ReJet menu) | `Screenshotsurst_<date>_<time>rame_NNN.bmp` |
+| **F9** | **Screenshot burst**: every 4th frame for 4 seconds (60 images), to study an animation, ReJet's overlay included (works in menus too) | `Screenshots\burst_<date>_<time>\frame_NNN.bmp` |
 | **F10** | Marker: writes `MARK 1`, `MARK 2`, ... with the frame number into the log | `loader.log` |
 
 ## Reporting a problem

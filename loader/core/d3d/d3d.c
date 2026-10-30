@@ -950,9 +950,9 @@ static void f12_screenshot(void)
     }
 }
 
-static void maybe_screenshot(void)
+/* F12 and F9: what's on screen, ReJet's overlay (HUD, hint, messages) included. */
+static void user_screenshots(void)
 {
-    static int every = -1;
     char name[MAX_PATH];
     if (!g_dev)
         return;
@@ -977,6 +977,15 @@ static void maybe_screenshot(void)
             save_backbuffer(name);
         }
     }
+}
+
+/* REJET_SHOTS (debugging): before or after the overlay, as REJET_SHOTSOVERLAY says. */
+static void maybe_screenshot(void)
+{
+    static int every = -1;
+    char name[MAX_PATH];
+    if (!g_dev)
+        return;
     if (every < 0) {
         char env[8] = "";
         every = GetEnvironmentVariableA("REJET_SHOTS", env, sizeof env) ? atoi(env) : 0;
@@ -1014,6 +1023,7 @@ static DWORD XBAPI hle_D3DDevice_Swap(DWORD Flags)
         testing_hotkeys(); /* before Present: the back buffer still holds this frame */
         if (g_dev) {
             menu_frame(g_frame_draws); /* splash, messages, FPS; runs the menu (game paused) when opened */
+            user_screenshots();
             if (overlay)
                 maybe_screenshot();
         }
