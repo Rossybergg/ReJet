@@ -36,12 +36,12 @@ The walker sees every HUD node, so the ReJet HUD can read what the original woul
 | health (0x106AD0) | + 0x48 / + 0x60, + 0xA8 / + 0xC0 | 395 / 585.5, 395 / 516.9 | the bar's background and yellow fill quads (x, in 640x480 space): **health = fill width / background width** (0.64 at the start of play, as on screen) |
 | health | + 0x2B0 | 46 | the bar's length in 4-unit segments (0x1CB0B0 = 4.0), not the health |
 | health | + 0x2B4 | a handle | the player (`FUN_00012890(handle)` returns the player object; draws while player + 0x16AC < 0) |
-| cans (0x10E680) | + 0xB8 | 0 with no cans | cans held (to confirm by collecting some) |
+| cans (0x10E680) | + 0xB8 | 0 .. 15 in play | cans held (confirmed 2026-10-30: rises as cans are collected, falls when boosting or spraying) |
 | cans | + 0xD8 | 30 | the can cap |
 | cans | + 0xD0, + 0xD4 | 0 | digit glyphs of the count |
 | speed (0x10DEA0) | + 0x1D0 / + 0x1D4 | 0 .. 2.31 | the **speed meter** (not a boost meter: it rises as you skate, full when boosting): current speed (clamped) over the maximum, as its update method 0x10DDA0 computes; that method also shifts the fill from blue to red with speed |
 
-To confirm: a short real play session with `REJET_HUDLOG=1` (collect cans, take a hit, boost) and read `hud:` lines in loader.log.
+Confirmed in a real play session with `REJET_HUDLOG=1` (2026-10-30): the can count follows collecting and spending cans, and the speed meter reaches exactly 1.0 while boosting.
 
 ## The ReJet HUD (proof of concept)
 
