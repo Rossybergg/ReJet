@@ -102,7 +102,9 @@ Finish the single-player ReJet HUD before any multiplayer or split-screen work. 
 
 **Then split screen** (multiplayer): the per-viewport walkers (0x11680 etc.), the HUD values per player index, and a multiplayer test setup.
 
-## After 0.4.2 (alpha 4 released 2026-10-30): what's left before alpha 5
+## Do next (backlog after 0.4.2, alpha 4 released 2026-10-30)
+
+Not blocking alpha 5: any HUD piece ReJet doesn't redraw yet shows the game's own, so the game stays fully playable.
 
 Single-player ReJet HUD (finish before any split screen):
 1. The spray / tag gauge (0x107300): restyle or keep.
@@ -117,4 +119,12 @@ Release gate and setup:
 8. Test fresh default settings in the gate (a positional defaults list shipped Japanese and HudEdges in 0.4.0/0.4.1 test builds).
 9. Extract the game to a shared folder (%LOCALAPPDATA%\rejet\Game, beside the saves) so new versions skip setup.
 
-Then **alpha 5**: widescreen for the loading screen, character select and the pause menu's map. After that, the ReJet HUD in split screen.
+Split screen for the ReJet HUD comes after all of the single-player items.
+
+## Alpha 5 plan (user, 2026-10-30): a good long play
+
+Goal: someone can play for hours without screens breaking in widescreen, so the user can run long sessions to test stability and make saves before races and other events (which the backlog's HUD work then needs).
+
+1. Fix the screens that don't fit widescreen: the loading screen, character select, the pause menu with the map, and any others found in play (parts clip, or what should be hidden shows at the sides).
+2. Long play sessions by the user (launched from Explorer, so saves land on the real disk), with bugs reported through the ReJet menu.
+3. Fix what those sessions turn up; then release alpha 5.
