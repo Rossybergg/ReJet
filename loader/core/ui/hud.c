@@ -94,9 +94,12 @@ static void log_stats(int index)
     }
 }
 static ULONG g_values_frame = (ULONG)-10; /* when the health node last drew */
-static ULONG g_combo_frame = (ULONG)-10, g_tricks_frame = (ULONG)-10, g_tag_frame = (ULONG)-10, g_soul_frame = (ULONG)-10; /* popups */
+static ULONG g_combo_frame = (ULONG)-10, g_tricks_frame = (ULONG)-10, g_tag_frame = (ULONG)-10; /* popups */
 #define SOUL_HOLD 0 /* the soul popup lasts as long as the game's, then fades over 20 frames */
-static int g_soul_state; /* the game popup's state (+0x128): 3 holding (paused while not drawn), 5 fading, 6 done */
+/* The game's soul popups seen lately, one per node: two pickups close together leave two alive (the
+ * first paused by its spin), and ReJet shows only the newest. state is +0x128: 3 holding (paused
+ * while not drawn), 5 fading, 6 done. */
+static struct { const void *node; ULONG first, last; int soul, state, retired; } g_souls[4];
 static DWORD g_seen[256];
 static unsigned g_nseen;
 
@@ -184,6 +187,32 @@ static void log_active(DWORD draw)
         now[nnow++] = draw;
 }
 
+/* REJET_HUDLOG=1: while a soul popup is alive, log each node (draw method and instance) the first time
+ * it draws, to find what else a pickup shows. */
+static void log_soul_nodes(DWORD draw, const unsigned char *node)
+{
+    static int on = -1;
+    static const void *seen[64];
+    static unsigned n;
+    int alive = 0;
+    if (on < 0) {
+        char env[4] = "";
+        on = GetEnvironmentVariableA("REJET_HUDLOG", env, sizeof env) && env[0] == '1';
+    }
+    if (!on)
+        return;
+    for (int k = 0; k < 4; k++)
+        alive |= g_souls[k].node && d3d_frame() - g_souls[k].last < 600;
+    if (!alive)
+        return;
+    for (unsigned i = 0; i < n; i++)
+        if (seen[i] == node)
+            return;
+    if (n < 64)
+        seen[n++] = node;
+    log_printf("hud: soul-time node %p draw %08lX flags %08lX\n", (const void *)node, draw, *(const DWORD *)(node + 4));
+}
+
 static void __fastcall hud_draw_tree(unsigned char *node)
 {
     if (g_hide < 0) {
@@ -196,6 +225,7 @@ static void __fastcall hud_draw_tree(unsigned char *node)
             note(draw, node);
             log_values(draw, node);
             log_active(draw);
+            log_soul_nodes(draw, node);
             int skip = g_hide == 1 && draw >= HUD_CODE_START && draw < HUD_CODE_END;
             if (draw == 0x10DEA0) { /* speed: current (+0x1D0, clamped) over the maximum (+0x1D4), as its update (0x10DDA0) */
                 float top = *(const float *)(node + 0x1D4);
@@ -248,9 +278,30 @@ static void __fastcall hud_draw_tree(unsigned char *node)
                                           * (flag 0x100000), with a 3D title (0xFBD40); ReJet shows "GET No. N" for
                                           * as long as the node lives */
                 if (*(const int *)(node + 0x11C) > 0) {
-                    g_values.soul = *(const int *)(node + 0x11C);
-                    g_soul_state = *(const int *)(node + 0x128);
-                    g_soul_frame = d3d_frame();
+                    ULONG f = d3d_frame();
+                    unsigned k = 0, oldest = 0;
+                    while (k < 4 && g_souls[k].node != node)
+                        k++;
+                    if (k < 4 && g_souls[k].retired && f - g_souls[k].last <= 600) { /* an older popup: ignore it */
+                        g_souls[k].last = f;
+                        k = 4 + 1;
+                    }
+                    else if (k == 4 || f - g_souls[k].last > 600) { /* a new popup (a node unseen for 10 s is a new one) */
+                        for (k = 0; k < 4; k++)
+                            if (g_souls[k].last < g_souls[oldest].last)
+                                oldest = k;
+                        k = oldest;
+                        for (unsigned j = 0; j < 4; j++) /* a newer pickup retires the older popups */
+                            g_souls[j].retired = 1;
+                        g_souls[k].node = node;
+                        g_souls[k].retired = 0;
+                        g_souls[k].first = f;
+                    }
+                    if (k < 4) {
+                        g_souls[k].last = f;
+                        g_souls[k].soul = *(const int *)(node + 0x11C);
+                        g_souls[k].state = *(const int *)(node + 0x128);
+                    }
                 }
             }
             /* HUD: ReJet draws its own health, cans and speed meter (menu.c) */
@@ -293,12 +344,24 @@ int hud_values(HudValues *out)
         out->tricks_fade = 0;
     if (f - g_tag_frame > 2)
         out->tag_fade = 0;
-    { /* full while the game's popup lives, then a 20-frame fade. Its timer stops while
-       * the pickup's camera spin hides it, so while it was last seen holding (state < 5) it stays up (10 s cap) */
-        ULONG t = f - g_soul_frame;
-        if (g_soul_state < 5 && t < 600)
-            t = 0;
-        out->soul_fade = t <= SOUL_HOLD ? 1.0f : t < SOUL_HOLD + 20 ? (float)(SOUL_HOLD + 20 - t) / 20.0f : 0;
+    { /* the newest popup still showing: full while the game's lives, then a 20-frame fade. Its timer stops
+       * while the pickup's camera spin hides it, so while it was last seen holding (state < 5) it stays up (10 s cap) */
+        int best = -1;
+        out->soul_fade = 0;
+        for (int k = 0; k < 4; k++) {
+            ULONG t = f - g_souls[k].last;
+            float fade;
+            if (!g_souls[k].node || g_souls[k].retired)
+                continue;
+            if (g_souls[k].state < 5 && t < 600)
+                t = 0;
+            fade = t <= SOUL_HOLD ? 1.0f : t < SOUL_HOLD + 20 ? (float)(SOUL_HOLD + 20 - t) / 20.0f : 0;
+            if (fade > 0 && (best < 0 || g_souls[k].first > g_souls[best].first)) {
+                best = k;
+                out->soul_fade = fade;
+                out->soul = g_souls[k].soul;
+            }
+        }
     }
     return f - g_values_frame <= 2;
 }
