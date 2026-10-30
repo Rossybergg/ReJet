@@ -126,5 +126,6 @@ Split screen for the ReJet HUD comes after all of the single-player items.
 Goal: someone can play for hours without screens breaking in widescreen, so the user can run long sessions to test stability and make saves before races and other events (which the backlog's HUD work then needs).
 
 1. Fix the screens that don't fit widescreen: the loading screen, character select, the pause menu with the map, and any others found in play (parts clip, or what should be hidden shows at the sides).
-2. Long play sessions by the user (launched from Explorer, so saves land on the real disk), with bugs reported through the ReJet menu.
-3. Fix what those sessions turn up; then release alpha 5.
+2. Performance while boosting (user): the game looks slower during a boost. Measure it (REJET_PERFLOG over a boost: frame work, stutters, which draws or copies the boost effect adds, e.g. its full-screen render-to-texture passes) and fix what costs time.
+3. Long play sessions by the user (launched from Explorer, so saves land on the real disk), with bugs reported through the ReJet menu.
+4. Fix what those sessions turn up; then release alpha 5.
