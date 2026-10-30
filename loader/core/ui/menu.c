@@ -257,16 +257,32 @@ static void scale_logo(DWORD *dst, UINT w, UINT h, UINT pitch)
 
 /* ---- HUD sprites (loader/res/hud: the ReJet HUD's artwork), in their own small texture */
 
-enum { SPR_CAN_FULL, SPR_CAN_EMPTY, SPR_TILE, SPR_PICT_BOOST, SPR_DIGITS, SPR_COUNT };
+enum {
+    SPR_CAN_FULL, SPR_CAN_EMPTY, SPR_TILE, SPR_DIGITS,
+    /* pictograms for the tile (black, drawn over SPR_TILE) */
+    SPR_PICT_BOOST, SPR_PICT_ALERT, SPR_PICT_BOLT, SPR_PICT_BOMB1, SPR_PICT_BOMB2, SPR_PICT_BOMB3, SPR_PICT_SKULL,
+    SPR_PICT_SPRAY, SPR_PICT_RUNNER, SPR_PICT_BALL,
+    /* words, in the digits' style */
+    SPR_WORD_TRICKS, SPR_WORD_PTS, SPR_WORD_GET, SPR_WORD_LAP, SPR_WORD_ORD,
+    /* the menu's tile icons (white, tinted when drawn) */
+    SPR_MENU_RESUME, SPR_MENU_REPORT, SPR_MENU_DISPLAY, SPR_MENU_AUDIO, SPR_MENU_GAME, SPR_MENU_CONTROLS, SPR_MENU_QUIT,
+    SPR_COUNT
+};
 static struct {
     const WCHAR *res;
     float canvas_h; /* the height drawn, in canvas units: the texture keeps it at screen size */
     DWORD *px;      /* premultiplied BGRA, original size */
     UINT w, h, aw, ah, ax, ay; /* original size; size and place in the sprite texture */
 } g_spr[SPR_COUNT] = {
-    {L"HUD_CAN_FULL", 64}, {L"HUD_CAN_EMPTY", 64}, {L"HUD_TILE", 60}, {L"HUD_PICT_BOOST", 60}, {L"HUD_DIGITS", 44},
+    {L"HUD_CAN_FULL", 64}, {L"HUD_CAN_EMPTY", 64}, {L"HUD_TILE", 60}, {L"HUD_DIGITS", 44},
+    {L"HUD_PICT_BOOST", 60}, {L"HUD_PICT_ALERT", 60}, {L"HUD_PICT_BOLT", 60}, {L"HUD_PICT_BOMB1", 60},
+    {L"HUD_PICT_BOMB2", 60}, {L"HUD_PICT_BOMB3", 60}, {L"HUD_PICT_SKULL", 60}, {L"HUD_PICT_SPRAY", 60},
+    {L"HUD_PICT_RUNNER", 60}, {L"HUD_PICT_BALL", 60},
+    {L"HUD_WORD_TRICKS", 36}, {L"HUD_WORD_PTS", 36}, {L"HUD_WORD_GET", 36}, {L"HUD_WORD_LAP", 36}, {L"HUD_WORD_ORD", 36},
+    {L"MENU_RESUME", 64}, {L"MENU_REPORT", 64}, {L"MENU_DISPLAY", 64}, {L"MENU_AUDIO", 64},
+    {L"MENU_GAME", 64}, {L"MENU_CONTROLS", 64}, {L"MENU_QUIT", 64},
 };
-#define SPR_TEX 1024
+#define SPR_TEX 2048
 static IDirect3DTexture9 *g_spr_tex;
 
 /* A PNG built into rejet.dll (RCDATA) as premultiplied BGRA. */
@@ -1629,55 +1645,16 @@ static void outlined(float x0, float y0, float x1, float y1, float o, DWORD fill
 /* The pause page's icons, in a 64-unit cell at (x, y), drawn in ink with 5-unit strokes. */
 static void icon(int page, int target, float x, float y, DWORD bg)
 {
-    const float t = 5;
-    switch (target) {
-    case -1: /* resume: play */
-        tri(x + 18, y + 8, x + 52, y + 32, x + 18, y + 56, C_INK);
-        break;
-    case PAGE_REPORT: /* a warning sign */
-        tri(x + 32, y + 4, x + 62, y + 58, x + 2, y + 58, C_INK);
-        tri(x + 32, y + 16, x + 52, y + 52, x + 12, y + 52, bg);
-        box(x + 29, y + 26, x + 35, y + 42, 0, C_INK);
-        box(x + 29, y + 45, x + 35, y + 50, 0, C_INK);
-        break;
-    case PAGE_DISPLAY: /* a monitor */
-        box(x + 4, y + 8, x + 60, y + 46, 0, C_INK);
-        box(x + 4 + t, y + 8 + t, x + 60 - t, y + 46 - t, 0, bg);
-        box(x + 29, y + 46, x + 35, y + 54, 0, C_INK);
-        box(x + 18, y + 54, x + 46, y + 58, 0, C_INK);
-        break;
-    case PAGE_AUDIO: /* a speaker with sound */
-        box(x + 6, y + 22, x + 18, y + 42, 0, C_INK);
-        tri(x + 16, y + 22, x + 34, y + 8, x + 34, y + 56, C_INK);
-        tri(x + 16, y + 22, x + 34, y + 56, x + 16, y + 42, C_INK);
-        box(x + 42, y + 26, x + 46, y + 38, 0, C_INK);
-        box(x + 52, y + 18, x + 56, y + 46, 0, C_INK);
-        break;
-    case PAGE_GAME: /* the game: a controller */
-        box(x + 2, y + 18, x + 62, y + 48, 0, C_INK);
-        box(x + 2 + t, y + 18 + t, x + 62 - t, y + 48 - t, 0, bg);
-        box(x + 12, y + 31, x + 26, y + 35, 0, C_INK);
-        box(x + 17, y + 26, x + 21, y + 40, 0, C_INK);
-        box(x + 40, y + 26, x + 46, y + 32, 0, C_INK);
-        box(x + 48, y + 34, x + 54, y + 40, 0, C_INK);
-        break;
-    case PAGE_CONTROLS: /* controller and keyboard layouts: a keyboard */
-        box(x + 2, y + 14, x + 62, y + 52, 0, C_INK);
-        box(x + 2 + t, y + 14 + t, x + 62 - t, y + 52 - t, 0, bg);
-        for (int r = 0; r < 2; r++)
-            for (int k = 0; k < 5; k++)
-                box(x + 11 + k * 9.5f, y + 23 + r * 9, x + 16 + k * 9.5f, y + 28 + r * 9, 0, C_INK);
-        box(x + 18, y + 41, x + 46, y + 45, 0, C_INK);
-        break;
-    default: /* quit: a door bracket and an arrow out */
-        box(x + 8, y + 8, x + 13, y + 56, 0, C_INK);
-        box(x + 8, y + 8, x + 30, y + 13, 0, C_INK);
-        box(x + 8, y + 51, x + 30, y + 56, 0, C_INK);
-        box(x + 22, y + 30, x + 48, y + 34, 0, C_INK);
-        tri(x + 44, y + 22, x + 60, y + 32, x + 44, y + 42, C_INK);
-        break;
-    }
+    int id = target == -1             ? SPR_MENU_RESUME
+             : target == PAGE_REPORT  ? SPR_MENU_REPORT
+             : target == PAGE_DISPLAY ? SPR_MENU_DISPLAY
+             : target == PAGE_AUDIO   ? SPR_MENU_AUDIO
+             : target == PAGE_GAME    ? SPR_MENU_GAME
+             : target == PAGE_CONTROLS ? SPR_MENU_CONTROLS
+                                       : SPR_MENU_QUIT; /* quit: a door and an arrow out */
+    sprite(id, x, y, 64, C_INK);
     (void)page;
+    (void)bg;
 }
 
 /* Short names for the tiles (the help strip says the rest). */
