@@ -17,7 +17,7 @@ That needs two things: a way to leave out the original HUD, and the values it sh
 | 0x10DEA0 | 0x1D60F0 | the speed meter (bottom right) |
 | 0x1080A0 | 0x1D5DE8 | the can icon, and the area name on the map screen (a shared sprite class) |
 | 0x105A90 | 0x1D5D20 | nothing visible while skating; not seen after the first minutes of play |
-| 0x10A590 | 0x1D5E28 | most likely the **boost icon** (the yellow skater sign shown from 10 cans): it draws every frame but showed nothing below 10 cans, and the sign stayed on screen with the ReJet HUD hiding the others (play-test burst, 2026-10-30); to confirm |
+| 0x10A590 | 0x1D5E28 | the **boost icon** (the yellow skater sign shown from 10 cans); confirmed in play 2026-10-30 |
 | 0x03CA80, 0x07E2D0, 0x0BB4A0, 0x046540, 0x0F8030, 0x0FE6E0, 0x0F8A40, 0x0F8810 | | other 2D (title, map, effects) |
 
 ## Leaving out the original HUD
@@ -33,7 +33,7 @@ The walker sees every HUD node, so the ReJet HUD can read what the original woul
 
 | Node (draw method) | Field | Seen | Meaning |
 |---|---|---|---|
-| health (0x106AD0) | + 0x48 / + 0x60, + 0xA8 / + 0xC0 | 395 / 585.5, 395 / 516.9 | the bar's background and yellow fill quads (x, in 640x480 space): **health = fill width / background width** (0.64 at the start of play, as on screen) |
+| health (0x106AD0) | + 0x48 / + 0x60, + 0xA8 / + 0xC0, + 0x108 / + 0x120 | 395 / 585.5, 395 / 516.9, 395 / 516.9 then falling | quads in 640x480 space: the whole bar, this character's maximum, and the **current health** (+0x120 fell 516.9 to 406.1 under hits in play, 2026-10-30); lost health shows black |
 | health | + 0x2B0 | 46 | the bar's length in 4-unit segments (0x1CB0B0 = 4.0), not the health |
 | health | + 0x2B4 | a handle | the player (`FUN_00012890(handle)` returns the player object; draws while player + 0x16AC < 0) |
 | cans (0x10E680) | + 0xB8 | 0 .. 15 in play | cans held (confirmed 2026-10-30: rises as cans are collected, falls when boosting or spraying) |
