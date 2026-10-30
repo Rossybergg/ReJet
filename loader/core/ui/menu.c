@@ -625,18 +625,67 @@ static float sprite(int id, float x, float y, float h, DWORD c)
     return sprite_part(id, x, y, h, 0, 1, c);
 }
 
-/* A number in the HUD's digits (sprite strip: 0-9 then x), h tall; returns the width. */
-static float hud_number(const char *s, float x, float y, float h, DWORD c)
+/* The width of sprite `id` drawn h tall. */
+static float sprite_width(int id, float h)
 {
-    float x0 = x;
+    return id >= 0 && id < SPR_COUNT && g_spr[id].h ? h * (float)g_spr[id].w / (float)g_spr[id].h : 0;
+}
+
+/* The width hud_number would draw s at, h tall. */
+/* Each glyph's ink across the digits strip (0..1 of its width), so numbers are spaced by their
+ * shapes, not their cells (a 1 is narrow). */
+static float g_glyph_l[11], g_glyph_r[11];
+static int g_glyphs;
+static void glyph_bounds(void)
+{
+    const DWORD *px = g_spr[SPR_DIGITS].px;
+    UINT w = g_spr[SPR_DIGITS].w, h = g_spr[SPR_DIGITS].h, cw = w / 11;
+    if (g_glyphs || !px || !cw)
+        return;
+    for (UINT k = 0; k < 11; k++) {
+        UINT l = cw, r = 0;
+        for (UINT y = 0; y < h; y++)
+            for (UINT x = 0; x < cw; x++)
+                if (px[y * w + k * cw + x] >> 24 > 64) {
+                    l = x < l ? x : l;
+                    r = x + 1 > r ? x + 1 : r;
+                }
+        if (r <= l) /* an empty cell: use all of it */
+            l = 0, r = cw;
+        g_glyph_l[k] = (float)(k * cw + l) / (float)w;
+        g_glyph_r[k] = (float)(k * cw + r) / (float)w;
+    }
+    g_glyphs = 1;
+}
+
+/* A number in the HUD's digits (sprite strip: 0-9 then x), h tall, glyphs a little apart; returns
+ * the width. With draw 0 it only measures. */
+static float hud_number_at(const char *s, float x, float y, float h, DWORD c, int draw)
+{
+    float x0 = x, gap = h * 0.04f;
+    glyph_bounds();
     for (; *s; s++) {
         int k = *s >= '0' && *s <= '9' ? *s - '0' : *s == 'x' ? 10 : -1;
-        if (k >= 0)
-            x += sprite_part(SPR_DIGITS, x, y, h, k / 11.0f, (k + 1) / 11.0f, c) * 0.82f; /* glyphs sit close */
+        if (k >= 0 && g_glyphs) {
+            float w = sprite_width(SPR_DIGITS, h) * (g_glyph_r[k] - g_glyph_l[k]);
+            if (draw)
+                sprite_part(SPR_DIGITS, x, y, h, g_glyph_l[k], g_glyph_r[k], c);
+            x += w + gap;
+        }
         else
             x += h * 0.3f;
     }
-    return x - x0;
+    return x - x0 - (x > x0 ? gap : 0);
+}
+
+static float hud_number(const char *s, float x, float y, float h, DWORD c)
+{
+    return hud_number_at(s, x, y, h, c, 1);
+}
+
+static float hud_number_width(const char *s, float h)
+{
+    return hud_number_at(s, 0, 0, h, 0, 0);
 }
 
 /* A quad in back-buffer pixels; `skew` shifts the top edge right (parallelograms). */
@@ -2187,8 +2236,7 @@ static void draw_rejet_hud(void)
         char s[16];
         float cx1 = DX(1280 - 40), cy = DY(62), dh = 44, cw, x;
         snprintf(s, sizeof s, "x%d", v.cans);
-        x = cx1 - hud_number(s, -10000, 0, dh, 0) - 6; /* measure (off screen), then draw right-aligned */
-        g_nsv -= 6 * (int)strlen(s);
+        x = cx1 - hud_number_width(s, dh) - 6; /* right-aligned */
         hud_number(s, x, cy + 12, dh, C_WHITE);
         cw = sprite(v.cans > 0 ? SPR_CAN_FULL : SPR_CAN_EMPTY, -10000, 0, 64, C_WHITE);
         g_nsv -= 6;
@@ -2200,6 +2248,59 @@ static void draw_rejet_hud(void)
             sprite(SPR_TILE, bx, by, 60, tint);
             sprite(SPR_PICT_BOOST, bx, by, 60, C_WHITE);
         }
+    }
+    if (v.show_cans && v.tags_total > 0) { /* tags in the stage, done of total, with the spray pictogram on
+                                            * the tile; it pops when a tag is done (the game's "5/16" popup) */
+        char d[12], t[12];
+        float pop = 1 + 0.3f * v.tag_fade, th = 40 * pop, dh = 32 * pop, slash = dh * 0.5f;
+        float x = DX(1280 - 40), y = DY(140), ty;
+        snprintf(d, sizeof d, "%d", v.tags_done);
+        snprintf(t, sizeof t, "%d", v.tags_total);
+        ty = y + th / 2 - dh * 0.645f; /* the digits' ink is rows 0.34..0.95 of their cells: centre it on the tile */
+        x -= hud_number_width(t, dh);
+        hud_number(t, x, ty, dh, C_WHITE);
+        x -= slash;
+        stroke(x + slash * 0.8f, ty + dh * 0.37f, x + slash * 0.2f, ty + dh * 0.92f, dh * 0.22f, 0xFF1A1A1Au);
+        stroke(x + slash * 0.8f, ty + dh * 0.37f, x + slash * 0.2f, ty + dh * 0.92f, dh * 0.1f, C_WHITE);
+        x -= hud_number_width(d, dh);
+        hud_number(d, x, ty, dh, v.tags_done >= v.tags_total ? 0xFFF2B705u : C_WHITE); /* all done: gold */
+        x -= th + 8;
+        sprite(SPR_TILE, x, y, th, C_WHITE);
+        sprite(SPR_PICT_SPRAY, x, y, th, C_WHITE);
+    }
+    if (v.show_health && v.score >= 0) { /* the score (the game only shows it in its popups) */
+        char s[16];
+        float x = DX(40), y = DY(32);
+        snprintf(s, sizeof s, "%d", v.score);
+        x += hud_number(s, x, y, 36, C_WHITE) + 6;
+        sprite(SPR_WORD_PTS, x, y + 16, 26, C_WHITE); /* low: its p descends */
+    }
+    if (v.combo_fade > 0) { /* the combo popup: points (gold) x multiplier, then the combo's total; it slides in
+                             * from the left and fades, on the game's own timing */
+        char s[16];
+        float x = DX(40) - DW(320) * (1 - v.combo_slide), y = DY(84);
+        g_fade = v.combo_fade;
+        snprintf(s, sizeof s, "%d", v.trick_points);
+        x += hud_number(s, x, y, 40, 0xFFE6C800u) + 4;
+        snprintf(s, sizeof s, "x%d", v.trick_mult);
+        hud_number(s, x, y + 8, 32, C_WHITE);
+        if (v.combo_total_fade > 0 && v.trick_total > 0) {
+            g_fade = v.combo_fade * v.combo_total_fade;
+            x = DX(40) - DW(320) * (1 - v.combo_slide);
+            snprintf(s, sizeof s, "%d", v.trick_total);
+            x += hud_number(s, x, y + 46, 32, C_WHITE) + 6;
+            sprite(SPR_WORD_PTS, x, y + 59, 22, C_WHITE);
+        }
+        g_fade = 1;
+    }
+    if (v.tricks_fade > 0 && v.tricks > 0) { /* "N TRICKS" after a combo */
+        char s[16];
+        float x = DX(40) - DW(320) * (1 - v.tricks_slide), y = DY(170);
+        g_fade = v.tricks_fade;
+        snprintf(s, sizeof s, "%d", v.tricks);
+        x += hud_number(s, x, y, 32, C_WHITE) + 8;
+        sprite(SPR_WORD_TRICKS, x, y + 4, 26, C_WHITE);
+        g_fade = 1;
     }
     if (v.show_speed) { /* speed: the game's wedge at the bottom right; the fill is a gradient along it, purple at
        * the slow end to red at the fast end, as the game's, with a thin dark outline */

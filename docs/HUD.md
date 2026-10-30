@@ -43,11 +43,20 @@ The walker sees every HUD node, so the ReJet HUD can read what the original woul
 
 Confirmed in a real play session with `REJET_HUDLOG=1` (2026-10-30): the can count follows collecting and spending cans, and the speed meter reaches exactly 1.0 while boosting.
 
-## The ReJet HUD (proof of concept)
+## The ReJet HUD
 
 Menu: Game > **HUD: Classic / ReJet** (`rejet.ini` [Display] `Hud=0/1`, default Classic). With ReJet, hud.c skips the original health bar (0x106AD0), cans (0x10E680) and speed meter (0x10DEA0), and `draw_rejet_hud` (menu.c) redraws them at the screen's edges, close to the game's shapes but cleaner: flat cel-shaded colour with a light top and shaded bottom, thin dark outlines and soft shadows (the user: modern, not comic-like). The can is red with no cans and yellow with some, as the game's. Each piece shows only when the game would show its own: the draw methods check the player's HUD flags at player + 0x16AC (player = *(manager + 0x98 + index * 4), manager at 0x236580, index in the node: health + 0x2B4, cans + 0x100, speed + 0x1D8), bit 31 for health, 0x4000000 for cans, 0x2000000 for speed. So the ReJet HUD is hidden in story scenes, on the map and in cutscenes, as the original. `REJET_SHOTSOVERLAY=1` makes `REJET_SHOTS` screenshots include ReJet's overlay.
 
+## Score, tricks and tags (found 2026-10-30)
+
+- **The stat getter** FUN_00108F00 (thiscall on the player, one id) feeds the popups. Named from two play sessions with `REJET_HUDLOG=1` (it logs all 17 when one changes): 0 / 1 health max / current, 4 / 5 can cap / cans, **6 the score**, **0xA tricks in the last combo**, 0xB the last graffiti soul picked up (0-based: 33 is soul 34), 0xC boost ready, **0xD / 0xE / 0xF the combo's points, multiplier (1, 2, 4, 8) and running total**. 2 and 3 are floats.
+- **Popups** (each update method runs a state machine: slide in, hold 120 frames, fade):
+  - 0x1009F0 (update 0x100790): points x multiplier in gold (0xE6C800), then the total; fade + 0x114, slide-in + 0x118, the total's fade + 0x11C; shown while player flag 0x100 is set. Its label is the full-width "X" at 0x1D1560.
+  - 0x102940 (update 0x1027E0): "N TRICKS" from stat 0xA; fade + 0x134, slide-in + 0x13C; flag 0x20000000.
+  - 0x104AD0 (update 0x1049D0): **"5/16"** when a tag is done; done + 0x48, total + 0x4C, fade + 0x134. Spawned by FUN_00108CA0 kind 1 from FUN_001077B0, which takes the numbers from **FUN_0004DC00** (thiscall on the object behind handle 9; fills a 0x118-byte summary: tags in the stage, then tags done, counted from the stage's tag spots by FUN_0003EEF0 / FUN_0003EF30).
+  - 0x104FF0: the trick's name (text from the language's string tables; flag 0x10000000). ReJet keeps the game's.
+- ReJet (hud.c) reads these each frame, skips the three popups in ReJet mode and draws its own on their timing (menu.c): the score at the top left, the combo and "N TRICKS" sliding in below it, and **tags done / total** under the cans, which pops when a tag is done.
+
 ## Still to find
 
-- The values: health, cans, boost, score, tags left. Each HUD node probably reads them from the player object; the draw methods above are the place to look (their loads give the offsets), which should be more stable than raw addresses (the can count's address moved between sessions).
 - Split screen: the per-viewport walkers (0x11680 etc.) need the same treatment.

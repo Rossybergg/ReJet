@@ -40,7 +40,61 @@ static DWORD player_flags(int index)
     player = *(const unsigned char *const *)(manager + 0x98 + (UINT_PTR)index * 4);
     return player ? *(const DWORD *)(player + 0x16AC) : 0;
 }
+/* The game's stat getter (FUN_00108f00, thiscall on the player): 0xD/0xE/0xF are the trick
+ * popup's points, multiplier and total (drawn by 0x1009F0), 0xA the number 0x102940 shows. */
+typedef int(__fastcall *StatFn)(const void *player, void *edx_unused, int id);
+static int player_stat(int index, int id)
+{
+    const unsigned char *manager = *(const unsigned char *const *)(UINT_PTR)0x236580, *player;
+    if (!manager || index < 0)
+        return -1;
+    player = *(const unsigned char *const *)(manager + 0x98 + (UINT_PTR)index * 4);
+    return player ? ((StatFn)(UINT_PTR)0x108F00)(player, NULL, id) : -1;
+}
+
+/* The stage's tag spots, as the game's "5/16" popup gets them (FUN_001077B0): FUN_0004DC00 on
+ * the object behind handle 9 fills a summary whose first two fields are the tags in the stage
+ * and the ones done. */
+typedef void(__fastcall *SummaryFn)(void *self, void *edx_unused, DWORD *out);
+static void stage_tags(int *done, int *total)
+{
+    const unsigned char *manager = *(const unsigned char *const *)(UINT_PTR)0x236580;
+    void *stage = manager ? *(void *const *)(manager + 0x98 + 9 * 4) : NULL;
+    DWORD summary[0x46] = {0};
+    *done = *total = 0;
+    if (!stage)
+        return;
+    ((SummaryFn)(UINT_PTR)0x4DC00)(stage, NULL, summary);
+    *total = (int)summary[0];
+    *done = (int)summary[1];
+}
+
+/* REJET_HUDLOG=1: log the player's stats (0..0x10) whenever one changes, to name them from play
+ * (which one counts the stage's tags, the score, ...). */
+static void log_stats(int index)
+{
+    static int on = -1, last[17];
+    int now[17];
+    if (on < 0) {
+        char env[4] = "";
+        on = GetEnvironmentVariableA("REJET_HUDLOG", env, sizeof env) && env[0] == '1';
+        memset(last, 0x7F, sizeof last);
+    }
+    if (!on)
+        return;
+    for (int i = 0; i < 17; i++)
+        now[i] = player_stat(index, i);
+    if (memcmp(now, last, sizeof now)) {
+        char line[320];
+        int n = snprintf(line, sizeof line, "hud: stats");
+        for (int i = 0; i < 17; i++)
+            n += snprintf(line + n, sizeof line - n, " %X=%d", i, now[i]);
+        log_printf("%s\n", line);
+        memcpy(last, now, sizeof now);
+    }
+}
 static ULONG g_values_frame = (ULONG)-10; /* when the health node last drew */
+static ULONG g_combo_frame = (ULONG)-10, g_tricks_frame = (ULONG)-10, g_tag_frame = (ULONG)-10; /* popups */
 static DWORD g_seen[256];
 static unsigned g_nseen;
 
@@ -155,16 +209,44 @@ static void __fastcall hud_draw_tree(unsigned char *node)
                 g_values.health = bg > 0 ? now / bg : 0;
                 g_values.show_health = (player_flags(*(const int *)(node + 0x2B4)) & 0x80000000u) != 0;
                 g_values_frame = d3d_frame();
+                {
+                    int index = *(const int *)(node + 0x2B4);
+                    log_stats(index);
+                    g_values.score = player_stat(index, 6);
+                    g_values.trick_points = player_stat(index, 0xD);
+                    g_values.trick_mult = player_stat(index, 0xE);
+                    g_values.trick_total = player_stat(index, 0xF);
+                    g_values.tricks = player_stat(index, 0xA);
+                    stage_tags(&g_values.tags_done, &g_values.tags_total);
+                }
             }
             else if (draw == 0x10E680) { /* cans held, and the cap */
                 g_values.cans = *(const int *)(node + 0xB8);
                 g_values.cans_max = *(const int *)(node + 0xD8);
                 g_values.show_cans = (player_flags(*(const int *)(node + 0x100)) & 0x4000000u) != 0;
             }
+            if (draw == 0x1009F0) { /* the combo popup: its fade (+0x114), slide-in (+0x118) and the total's fade (+0x11C) */
+                g_values.combo_fade = player_flags(*(const int *)(node + 0x120)) & 0x100u ? *(const float *)(node + 0x114) : 0;
+                g_values.combo_slide = *(const float *)(node + 0x118);
+                g_values.combo_total_fade = *(const float *)(node + 0x11C);
+                g_combo_frame = d3d_frame();
+            }
+            else if (draw == 0x102940) { /* "N TRICKS": fade +0x134, slide-in +0x13C */
+                g_values.tricks_fade =
+                    player_flags(*(const int *)(node + 0x138)) & 0x20000000u ? *(const float *)(node + 0x134) : 0;
+                g_values.tricks_slide = *(const float *)(node + 0x13C);
+                g_tricks_frame = d3d_frame();
+            }
+            else if (draw == 0x104AD0) { /* a tag done ("5/16"): fade +0x134 */
+                g_values.tag_fade = *(const float *)(node + 0x134);
+                g_tag_frame = d3d_frame();
+            }
             /* HUD: ReJet draws its own health, cans and speed meter (menu.c) */
             /* 0x10A590: the boost icon shown from 10 cans (seen in play-test bursts), redrawn by ReJet */
+            /* 0x1009F0, 0x102940 and 0x104AD0: the combo, tricks and tag popups, redrawn by ReJet */
             if (g_settings.hud_style == 1 &&
-                (draw == 0x106AD0 || draw == 0x10E680 || draw == 0x10DEA0 || draw == 0x10A590))
+                (draw == 0x106AD0 || draw == 0x10E680 || draw == 0x10DEA0 || draw == 0x10A590 || draw == 0x1009F0 ||
+                 draw == 0x102940 || draw == 0x104AD0))
                 skip = 1;
             if (g_hide == 2) { /* research: from frame 4200, hide HUD_METHODS[k] for 480 frames each, then none */
                 static int last = -1;
@@ -190,8 +272,15 @@ static void __fastcall hud_draw_tree(unsigned char *node)
 
 int hud_values(HudValues *out)
 {
+    ULONG f = d3d_frame();
     *out = g_values;
-    return d3d_frame() - g_values_frame <= 2;
+    if (f - g_combo_frame > 2)
+        out->combo_fade = out->combo_total_fade = 0;
+    if (f - g_tricks_frame > 2)
+        out->tricks_fade = 0;
+    if (f - g_tag_frame > 2)
+        out->tag_fade = 0;
+    return f - g_values_frame <= 2;
 }
 
 const HlePatch g_hud_patches[] = {
