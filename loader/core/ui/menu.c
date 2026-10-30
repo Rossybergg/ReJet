@@ -123,7 +123,11 @@ static float sdf_box(float px, float py, float a, float b, float r)
 }
 static IDirect3DTexture9 *g_atlas;
 static UINT g_bw, g_bh;             /* back-buffer size the atlas was built for */
-static float g_scale, g_ox;         /* canvas -> back buffer: x' = g_ox + x * g_scale */
+static float g_scale, g_ox, g_oy;   /* canvas -> back buffer: x' = g_ox + x * g_scale, y' = g_oy + y * g_scale */
+/* While the menu is open the canvas fits a 16:9 area, centred and scaled evenly, so its designs
+ * (drawn on a 16:9 board) keep their shapes below 16:9 (the 4:3 default); the atlas is built for
+ * whichever canvas is in use. */
+static int g_menu_fit, g_atlas_fit;
 
 /* ------------------------------------------------------------------ logo */
 
@@ -419,10 +423,12 @@ static int build_atlas(UINT bw, UINT bh)
     }
     g_bw = bw;
     g_bh = bh;
+    g_atlas_fit = g_menu_fit;
     g_scale = (float)bh / 960.0f;
-    if ((float)bw < 1280.0f * g_scale) /* narrower than 4:3: fit the width */
-        g_scale = (float)bw / 1280.0f;
+    if ((float)bw < (g_menu_fit ? 960.0f * 16.0f / 9.0f : 1280.0f) * g_scale) /* narrower: fit the width */
+        g_scale = (float)bw / (g_menu_fit ? 960.0f * 16.0f / 9.0f : 1280.0f);
     g_ox = ((float)bw - 1280.0f * g_scale) * 0.5f;
+    g_oy = ((float)bh - 960.0f * g_scale) * 0.5f;
 
     memset(&bi, 0, sizeof bi);
     bi.bmiHeader.biSize = sizeof bi.bmiHeader;
@@ -587,7 +593,9 @@ static float X(float x) { return g_ox + x * g_scale; }
 /* The screen's edges on the canvas (beyond 0..1280 on wide screens). */
 static float canvas_left(void) { return -g_ox / g_scale; }
 static float canvas_right(void) { return 1280.0f + g_ox / g_scale; }
-static float Y(float y) { return y * g_scale; }
+static float canvas_top(void) { return -g_oy / g_scale; }
+static float canvas_bottom(void) { return 960.0f + g_oy / g_scale; }
+static float Y(float y) { return g_oy + y * g_scale; }
 
 #define MAX_SPR_VERTS 1200
 static Vertex g_sv[MAX_SPR_VERTS]; /* HUD sprites, drawn after the batch with g_spr_tex */
@@ -966,7 +974,7 @@ static int ready(void)
         return 0;
     IDirect3DSurface9_GetDesc(bb, &d);
     IDirect3DSurface9_Release(bb);
-    if (!g_atlas || d.Width != g_bw || d.Height != g_bh)
+    if (!g_atlas || d.Width != g_bw || d.Height != g_bh || g_atlas_fit != g_menu_fit)
         build_atlas(d.Width, d.Height);
     return g_atlas != NULL;
 }
@@ -1835,14 +1843,16 @@ static void draw_menu(void)
     g_fade = o;
     /* the game's Garage screens never stand still (F9 bursts of them, docs/MENU_DESIGN.md): a
      * two-tone field, bars that keep shifting, a light band sweeping down, all on the clock */
-    box(canvas_left() - 10, -10, canvas_right() + 10, 970, 0, C_FIELD);
-    box(canvas_left() - 10, DY(main_page ? 380 : 330), canvas_right() + 10, 970, 0, 0x1AC86400u); /* deeper lower half */
+    box(canvas_left() - 10, canvas_top() - 10, canvas_right() + 10, canvas_bottom() + 10, 0, C_FIELD);
+    box(canvas_left() - 10, DY(main_page ? 380 : 330), canvas_right() + 10, canvas_bottom() + 10, 0,
+        0x1AC86400u); /* deeper lower half */
     {
         static const float bars[][2] = {{0, 26}, {44, 44}, {106, 18}, {142, 60}, {220, 22}};
         float h = DY(main_page ? 96 : 64), dy = -h * slide, ts = (float)(t / 1000.0);
         for (int i = 0; i < 5; i++) {
             float drift = 10 * sinf(ts * (0.9f + 0.37f * i) + i * 1.7f), grow = 6 * sinf(ts * (1.3f + 0.21f * i) + i);
-            box(DX(60 + bars[i][0] + drift), -10 + dy, DX(60 + bars[i][0] + bars[i][1] + drift + grow), h + dy, 0, C_ORANGE);
+            box(DX(60 + bars[i][0] + drift), canvas_top() - 10 + dy, DX(60 + bars[i][0] + bars[i][1] + drift + grow),
+                h + dy, 0, C_ORANGE); /* from the screen's top to their place above the logo */
         }
     }
     { /* the light band */
@@ -2028,8 +2038,8 @@ static void draw_menu(void)
 
     /* the button bar, with the build for bug reports */
     {
-        float dy = 80 * slide, top = 960 - DY(60);
-        box(canvas_left(), top + dy, canvas_right(), 960 + dy, 0, C_INK);
+        float dy = 80 * slide, top = canvas_bottom() - DY(60); /* on the screen's bottom */
+        box(canvas_left(), top + dy, canvas_right(), canvas_bottom() + dy, 0, C_INK);
         text(FONT_SMALL, canvas_right() - 28, top + 22 + dy, 2, 0xFFC9C9C9u, "ReJet " REJET_BUILD);
         if (g_text_focus)
             text(FONT_SMALL, 640, top + 22 + dy, 1, C_WHITE, "Type your note   Enter / Down  next   Esc  back");
@@ -2091,6 +2101,7 @@ static void freeze_frame(void)
 static void run_menu(void)
 {
     log_printf("menu: opened\n");
+    g_menu_fit = 1; /* its 16:9 canvas (the next ready() rebuilds the atlas for it) */
     sync_from_settings();
     freeze_frame();
     g_depth = 0;
@@ -2162,6 +2173,7 @@ static void run_menu(void)
         IDirect3DTexture9_Release(g_frozen);
         g_frozen = NULL;
     }
+    g_menu_fit = 0;
     InterlockedExchange(&g_open, 0);
     InterlockedExchange(&g_swallow, 1);
     log_printf("menu: closed\n");
