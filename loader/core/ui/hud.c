@@ -95,6 +95,7 @@ static void log_stats(int index)
 }
 static ULONG g_values_frame = (ULONG)-10; /* when the health node last drew */
 static ULONG g_combo_frame = (ULONG)-10, g_tricks_frame = (ULONG)-10, g_tag_frame = (ULONG)-10; /* popups */
+static ULONG g_race_frame = (ULONG)-10;
 #define SOUL_HOLD 0 /* the soul popup lasts as long as the game's, then fades over 20 frames */
 /* The game's soul popups seen lately, one per node: two pickups close together leave two alive (the
  * first paused by its spin), and ReJet shows only the newest. state is +0x128: 3 holding (paused
@@ -304,12 +305,21 @@ static void __fastcall hud_draw_tree(unsigned char *node)
                     }
                 }
             }
+            else if (draw == 0x10F640) { /* the race timer (update 0x10F540): seconds, a float at +0x84; hidden
+                                          * while +0x48 has bit 31; mode +0x160 */
+                int mode = *(const int *)(node + 0x160);
+                g_values.race_time = *(const DWORD *)(node + 0x48) & 0x80000000u ? -1 : *(const float *)(node + 0x84);
+                if (mode != g_values.race_mode)
+                    log_printf("hud: race timer mode %d -> %d at %.2f s\n", g_values.race_mode, mode, g_values.race_time);
+                g_values.race_mode = mode;
+                g_race_frame = d3d_frame();
+            }
             /* HUD: ReJet draws its own health, cans and speed meter (menu.c) */
             /* 0x10A590: the boost icon shown from 10 cans (seen in play-test bursts), redrawn by ReJet */
             /* 0x1009F0, 0x102940, 0x104AD0, 0x1054D0: the combo, tricks, tag and soul popups, redrawn by ReJet */
             if (g_settings.hud_style == 1 &&
                 (draw == 0x106AD0 || draw == 0x10E680 || draw == 0x10DEA0 || draw == 0x10A590 || draw == 0x1009F0 ||
-                 draw == 0x102940 || draw == 0x104AD0 || draw == 0x1054D0 ||
+                 draw == 0x102940 || draw == 0x104AD0 || draw == 0x1054D0 || draw == 0x10F640 ||
                  draw == 0xFBD40)) /* 0xFBD40: the soul pickup's 3D title, replaced by ReJet's "GET No. N" */
                 skip = 1;
             if (g_hide == 2) { /* research: from frame 4200, hide HUD_METHODS[k] for 480 frames each, then none */
@@ -344,6 +354,8 @@ int hud_values(HudValues *out)
         out->tricks_fade = 0;
     if (f - g_tag_frame > 2)
         out->tag_fade = 0;
+    if (f - g_race_frame > 2)
+        out->race_time = -1;
     { /* the newest popup still showing: full while the game's lives, then a 20-frame fade. Its timer stops
        * while the pickup's camera spin hides it, so while it was last seen holding (state < 5) it stays up (10 s cap) */
         int best = -1;

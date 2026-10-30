@@ -678,6 +678,32 @@ static float hud_number_at(const char *s, float x, float y, float h, DWORD c, in
     return x - x0 - (x > x0 ? gap : 0);
 }
 
+/* As hud_number_at, but every digit in a cell as wide as the widest, glyphs centred, so a changing
+ * number keeps its width (timers). */
+static float hud_number_fixed(const char *s, float x, float y, float h, DWORD c, int draw)
+{
+    float x0 = x, gap = h * 0.04f, cell = 0;
+    glyph_bounds();
+    if (!g_glyphs)
+        return hud_number_at(s, x, y, h, c, draw);
+    for (int k = 0; k < 10; k++)
+        if (g_glyph_r[k] - g_glyph_l[k] > cell)
+            cell = g_glyph_r[k] - g_glyph_l[k];
+    cell *= sprite_width(SPR_DIGITS, h);
+    for (; *s; s++) {
+        int k = *s >= '0' && *s <= '9' ? *s - '0' : -1;
+        if (k >= 0) {
+            float w = sprite_width(SPR_DIGITS, h) * (g_glyph_r[k] - g_glyph_l[k]);
+            if (draw)
+                sprite_part(SPR_DIGITS, x + (cell - w) / 2, y, h, g_glyph_l[k], g_glyph_r[k], c);
+            x += cell + gap;
+        }
+        else
+            x += h * 0.3f;
+    }
+    return x - x0 - (x > x0 ? gap : 0);
+}
+
 static float hud_number(const char *s, float x, float y, float h, DWORD c)
 {
     return hud_number_at(s, x, y, h, c, 1);
@@ -2208,6 +2234,24 @@ static void outlined_text(int font, float x, float y, int align, DWORD c, const 
     text(font, x, y, align, c, s);
 }
 
+/* A colon in the HUD digits' style (two outlined squares as thick as their strokes, on their ink: rows 0.34..0.95), for a
+ * number h tall at x, y; returns its width. */
+static float hud_colon_width(float h)
+{
+    return h * (0.125f + 2 * 0.073f + 0.06f);
+}
+
+static float hud_colon(float x, float y, float h, DWORD c)
+{
+    float d = h * 0.125f, o = h * 0.073f, w = d + 2 * o; /* the digits' stroke and outline (12 and 7 of 96 px) */
+    for (int i = 0; i < 2; i++) {
+        float cy = y + h * (i ? 0.82f : 0.48f);
+        box(x, cy - d / 2 - o, x + w, cy + d / 2 + o, 0, 0xFF1A1A1Au);
+        box(x + o, cy - d / 2, x + o + d, cy + d / 2, 0, c);
+    }
+    return hud_colon_width(h);
+}
+
 /* The ReJet HUD (HUD: ReJet; the Garage HUD board, docs/HUD.md): the original's health bar, can
  * count and speed meter, redrawn cleanly at the screen's edges. Flat cel-shaded colour with a
  * light top and shaded bottom, thin dark outlines and soft shadows, close to the game's own
@@ -2323,6 +2367,25 @@ static void draw_rejet_hud(void)
         x += sprite(SPR_WORD_GET, x, y + dh * 0.95f - wh, wh, C_WHITE) + 12; /* on the digits' baseline */
         hud_number(s, x, y, dh, 0xFFE6C800u);
         g_fade = 1;
+    }
+    if (v.race_time >= 0) { /* the race timer: minutes and seconds large, hundredths small and raised, in the
+                             * game's blue, top centre (the game's is a low-resolution sprite) */
+        char mm[8], ss[8], hh[8];
+        const DWORD blue = 0xFF6496FFu; /* the game's timer blue */
+        float t = v.race_time, bh = 52, sh = 32, w, x, y = DY(20), ys = y + 0.34f * (bh - sh); /* small: top-aligned */
+        unsigned whole = (unsigned)t, hund = (unsigned)((t - (float)whole) * 100.0f);
+        snprintf(mm, sizeof mm, "%02u", whole / 60 % 100);
+        snprintf(ss, sizeof ss, "%02u", whole % 60);
+        snprintf(hh, sizeof hh, "%02u", hund % 100);
+        /* fixed-width digits, so the ticking hundredths don't shift the centred time */
+        w = hud_number_fixed(mm, 0, 0, bh, 0, 0) + hud_number_fixed(ss, 0, 0, bh, 0, 0) +
+            hud_number_fixed(hh, 0, 0, sh, 0, 0) + 2 * bh * 0.06f + hud_colon_width(bh) + hud_colon_width(sh);
+        x = (DX(0) + DX(1280)) / 2 - w / 2;
+        x += hud_number_fixed(mm, x, y, bh, blue, 1) + bh * 0.06f;
+        x += hud_colon(x, y, bh, blue);
+        x += hud_number_fixed(ss, x, y, bh, blue, 1) + bh * 0.06f;
+        x += hud_colon(x, ys, sh, blue);
+        hud_number_fixed(hh, x, ys, sh, blue, 1); /* raised to the big digits' top, as the game's */
     }
     if (v.show_speed) { /* speed: the game's wedge at the bottom right; the fill is a gradient along it, purple at
        * the slow end to red at the fast end, as the game's, with a thin dark outline */

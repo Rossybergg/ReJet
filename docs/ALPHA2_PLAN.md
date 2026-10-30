@@ -97,7 +97,7 @@ Finish the single-player ReJet HUD before any multiplayer or split-screen work. 
 2. **The spray / tag gauge** (0x107300, drawn while tagging): restyle or keep the game's.
 3. **Unknown nodes** seen in play: 0x101BC0 (with can pickups), 0x1017A0 and 0x105A90 (3D-drawn): identify each and decide redraw or keep.
 4. **The tile pictograms in use**: find the game states they stand for (alert, bombs, skull, bolt, ball, runner) and show them on the tile.
-5. **Races and timed modes**: timer (small digits and colon), LAP, positions (ST / ND / RD / TH words are ready).
+5. **Races and timed modes**: ~~timer~~ done 2026-10-30 (0x10F640). Still to see: the finish-screen time, and races with laps or positions (LAP and ST / ND / RD / TH words are ready).
 6. Check the map screen (area name, 0x1080A0) and story scenes still hide or show the right pieces.
 
 **Then split screen** (multiplayer): the per-viewport walkers (0x11680 etc.), the HUD values per player index, and a multiplayer test setup.
