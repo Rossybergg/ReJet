@@ -35,7 +35,7 @@ You don't need to work out which version you have: ReJet checks your disc image 
 
 1. Download the latest release from the [Releases](../../releases) page and unzip it somewhere you can write to, like your Documents folder.
 2. Run **ReJet.exe**.
-3. The first time, ReJet asks for your game. Pick your disc image and it copies the game files into a `Game` folder next to ReJet (you'll see a progress bar), or pick a folder where you've already extracted the game.
+3. The first time, ReJet asks for your game. Pick your disc image and it copies the game files into `%LOCALAPPDATA%\rejet\Game` (you'll see a progress bar), or pick a folder where you've already extracted the game. That's done once: newer versions of ReJet find the game there, next to your saves.
 4. That's it. From then on, ReJet.exe goes straight into the game.
 
 Your saves and settings are kept between sessions.

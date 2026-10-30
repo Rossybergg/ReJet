@@ -155,8 +155,10 @@ def check_setup(iso):
         ini = os.path.join(tmp, "rejet.ini")
         with open(ini, "w") as f:
             f.write(SETTINGS)  # no [Game] Folder: the setup screen must find the game
+        # REJET_GAMEDIR: extract into the temporary folder, not the shared %LOCALAPPDATA%\rejet\Game
+        # (which a player's install may already have, so setup would be skipped)
         env = dict(os.environ, REJET_INI=ini, REJET_SETUP_IMAGE=iso, REJET_RUNSECONDS=str(SETUP_SECONDS),
-                   REJET_SKIPWARNING="1")
+                   REJET_SKIPWARNING="1", REJET_GAMEDIR=os.path.join(tmp, "Game"))
         print(f"  ....  first-run setup from a fresh folder (extracts the disc; a window opens)")
         r = subprocess.run([os.path.join(tmp, "ReJet.exe")], cwd=tmp, env=env, timeout=1800)
         log = open(os.path.join(tmp, "loader.log"), errors="replace").read() if os.path.isfile(

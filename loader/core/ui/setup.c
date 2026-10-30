@@ -3,7 +3,7 @@
  * ReJet runs the original Default.xbe from an extracted copy of the disc. On a first start
  * (no files found) this screen asks for the disc image or an extracted folder, checks that its
  * Default.xbe is the PAL release ReJet supports (SHA-1, hle_xbe_supported), and extracts an
- * image into Game\ next to ReJet.exe, with progress. The folder is remembered in
+ * image into %LOCALAPPDATA%\rejet\Game (beside the saves, shared by every ReJet version), with progress. The folder is remembered in
  * rejet.ini ([Game] Folder). The window is drawn with GDI in the ReJet menu's Garage style (the game's
  * Direct3D device doesn't exist yet); mouse, keyboard and controller all work.
  *
@@ -51,6 +51,15 @@ static unsigned char *read_whole(const WCHAR *path, DWORD *size)
     return buf;
 }
 
+void setup_shared_folder(WCHAR *folder, unsigned cap)
+{
+    WCHAR local[MAX_PATH] = L"";
+    if (GetEnvironmentVariableW(L"REJET_GAMEDIR", folder, cap) && folder[0]) /* tests: a fresh folder */
+        return;
+    GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+    swprintf(folder, cap, L"%ls\\rejet\\Game", local);
+}
+
 int setup_folder_ok(const WCHAR *folder)
 {
     WCHAR path[MAX_PATH];
@@ -74,7 +83,7 @@ enum { ST_WELCOME, ST_WORKING, ST_ERROR, ST_DONE };
 static HWND g_wnd;
 static int g_state, g_sel;
 static WCHAR g_message[512];
-static WCHAR g_target[MAX_PATH]; /* Game\ next to the exe */
+static WCHAR g_target[MAX_PATH]; /* where an image is extracted: setup_shared_folder() */
 static WCHAR g_result[MAX_PATH]; /* the folder to run from */
 static volatile LONG g_cancel;
 static volatile LONGLONG g_done_bytes, g_total_bytes;
@@ -135,8 +144,15 @@ static DWORD WINAPI extract_thread(void *arg)
     }
     g_total_bytes = (LONGLONG)iso->total;
     g_done_bytes = 0;
-    if (ok)
+    if (ok) {
+        WCHAR parent[MAX_PATH], *slash;
+        wcscpy_s(parent, MAX_PATH, g_target); /* %LOCALAPPDATA%\rejet may not exist yet */
+        if ((slash = wcsrchr(parent, L'\\')) != NULL) {
+            *slash = 0;
+            CreateDirectoryW(parent, NULL);
+        }
         CreateDirectoryW(g_target, NULL);
+    }
     for (unsigned i = 0; ok && i < iso->n && !g_cancel; i++) {
         const IsoFile *e = &iso->files[i];
         WCHAR out[MAX_PATH];
@@ -155,8 +171,8 @@ static DWORD WINAPI extract_thread(void *arg)
             if (f == INVALID_HANDLE_VALUE) {
                 WCHAR msg[512];
                 swprintf(msg, 512,
-                         L"ReJet couldn't save the game files (Windows error %lu). Try moving the ReJet folder "
-                         L"somewhere you can write to, like Documents.",
+                         L"ReJet couldn't save the game files (Windows error %lu). Check there's about 2.5 GB "
+                         L"free on drive C:, or choose a folder you've already extracted the game to.",
                          GetLastError());
                 fail(msg);
                 ok = 0;
@@ -560,7 +576,8 @@ int setup_run(const WCHAR *exe_dir, WCHAR *folder, unsigned cap)
         dpi_aware((HANDLE)-4); /* per-monitor v2, as the game window */
     InitializeCriticalSection(&g_lock);
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED); /* the folder picker */
-    swprintf(g_target, MAX_PATH, L"%s\\Game", exe_dir);
+    setup_shared_folder(g_target, MAX_PATH);
+    (void)exe_dir;
     g_state = ST_WELCOME;
     g_sel = 0;
     g_result[0] = 0;

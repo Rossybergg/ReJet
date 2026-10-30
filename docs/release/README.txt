@@ -12,7 +12,8 @@ FIRST START
 1. Unzip this folder anywhere you can write to (for example Documents\ReJet).
 2. Run ReJet.exe.
 3. Choose your disc image (.iso) or a folder you already extracted it to. ReJet checks it is
-   the supported PAL release and copies the game files into a "Game" folder here (about 2.5 GB).
+   the supported PAL release and copies the game files (about 2.5 GB) into
+   %LOCALAPPDATA%\rejet\Game, next to your saves. Newer versions of ReJet find them there.
 4. The game starts. Next time, ReJet.exe starts the game straight away.
 
 

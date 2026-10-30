@@ -458,7 +458,8 @@ static int run(void *image_base, unsigned image_size)
         if (argc >= 3)
             run_seconds = (unsigned)_wtoi(argv[2]);
     }
-    else { /* players: the saved game folder, Game\ next to the exe, or the setup screen */
+    else { /* players: the saved game folder, Game\ next to the exe (older installs), the shared one
+            * in %LOCALAPPDATA%\rejet (another version's setup), or the setup screen */
         WCHAR wexe[MAX_PATH], folder[MAX_PATH], *slash;
         GetModuleFileNameW(NULL, wexe, MAX_PATH);
         if ((slash = wcsrchr(wexe, L'\\')) != NULL)
@@ -466,6 +467,8 @@ static int run(void *image_base, unsigned image_size)
         settings_game_folder(folder, MAX_PATH);
         if (!setup_folder_ok(folder)) {
             swprintf(folder, MAX_PATH, L"%s\\Game", wexe);
+            if (!setup_folder_ok(folder))
+                setup_shared_folder(folder, MAX_PATH);
             if (setup_folder_ok(folder))
                 settings_set_game_folder(folder);
             else if (!setup_run(wexe, folder, MAX_PATH))
