@@ -93,9 +93,9 @@ Phase 1 first: a baseline before AA changes the cost of every frame, and the gat
 
 Finish the single-player ReJet HUD before any multiplayer or split-screen work. Done: health, cans and the boost sign, speed meter, score, trick combos, "N TRICKS", tags done / total (docs/HUD.md). Still to do in single player, in order:
 
-1. **Graffiti soul pickup** (node 0x1054D0, stat 0xB = soul number - 1): redraw as "GET No. 34" with the `hud_word_get` art.
+1. ~~**Graffiti soul pickup**~~ done 2026-10-30: one centred "GET No. N" replaces the 3D title (0xFBD40) and the popup (0x1054D0).
 2. **The spray / tag gauge** (0x107300, drawn while tagging): restyle or keep the game's.
-3. **Unknown nodes** seen in play: 0x101BC0 (with can pickups), 0x1017A0 and 0x105A90 (3D-drawn), 0x1054D0: identify each and decide redraw or keep.
+3. **Unknown nodes** seen in play: 0x101BC0 (with can pickups), 0x1017A0 and 0x105A90 (3D-drawn): identify each and decide redraw or keep.
 4. **The tile pictograms in use**: find the game states they stand for (alert, bombs, skull, bolt, ball, runner) and show them on the tile.
 5. **Races and timed modes**: timer (small digits and colon), LAP, positions (ST / ND / RD / TH words are ready).
 6. Check the map screen (area name, 0x1080A0) and story scenes still hide or show the right pieces.
