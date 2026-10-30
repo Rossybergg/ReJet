@@ -62,7 +62,7 @@ static void log_values(DWORD draw, const unsigned char *node)
     static int on = -1;
     static DWORD last[3][4];
     static const struct { DWORD draw; const char *name; unsigned off[4]; } fields[] = {
-        {0x106AD0, "health", {0x48, 0x60, 0xA8, 0xC0}},
+        {0x106AD0, "health", {0x60, 0xC0, 0x108, 0x120}},
         {0x10E680, "cans", {0xB8, 0xD8, 0xD0, 0xD4}},
         {0x10DEA0, "speed", {0x1D0, 0x1D4, 0xA8, 0xC0}},
     };
@@ -145,10 +145,13 @@ static void __fastcall hud_draw_tree(unsigned char *node)
                 g_values.speed = top > 0 ? *(const float *)(node + 0x1D0) / top : 0;
                 g_values.show_speed = (player_flags(*(const int *)(node + 0x1D8)) & 0x2000000u) != 0;
             }
-            if (draw == 0x106AD0) { /* health: the fill quad (+0xA8..+0xC0) over the background (+0x48..+0x60) */
+            if (draw == 0x106AD0) { /* health: quads over the background (+0x48..+0x60): the character's
+                                     * maximum (+0xA8..+0xC0) and the current health (+0x108..+0x120) */
                 float bg = *(const float *)(node + 0x60) - *(const float *)(node + 0x48);
-                float fill = *(const float *)(node + 0xC0) - *(const float *)(node + 0xA8);
-                g_values.health = bg > 0 ? fill / bg : 0;
+                float top = *(const float *)(node + 0xC0) - *(const float *)(node + 0xA8);
+                float now = *(const float *)(node + 0x120) - *(const float *)(node + 0x108);
+                g_values.health_max = bg > 0 ? top / bg : 0;
+                g_values.health = bg > 0 ? now / bg : 0;
                 g_values.show_health = (player_flags(*(const int *)(node + 0x2B4)) & 0x80000000u) != 0;
                 g_values_frame = d3d_frame();
             }

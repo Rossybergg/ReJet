@@ -8,7 +8,8 @@ extern const unsigned g_hud_patch_count;
 
 /* What the game's own HUD would show this frame, read from its nodes (docs/HUD.md). */
 typedef struct HudValues {
-    float health; /* 0..1: the original bar's fill over its background */
+    float health;     /* 0..1: current health, over the whole bar */
+    float health_max; /* 0..1: this character's maximum, over the whole bar (lost health shows black) */
     int cans, cans_max;
     float speed; /* 0..1: the speed meter (full when boosting) */
     int show_health, show_cans, show_speed; /* the game's own visibility flags (hidden in story scenes) */

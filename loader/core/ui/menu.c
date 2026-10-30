@@ -2012,9 +2012,11 @@ static void draw_rejet_hud(void)
     if (v.show_health) { /* health: a gold bar */
         float x1 = DX(1280 - 40), x0 = x1 - DW(300), y0 = DY(32), y1 = y0 + DY(16);
         float f = v.health < 0 ? 0 : v.health > 1 ? 1 : v.health, xf = x0 + (x1 - x0) * f;
+        float m = v.health_max < f ? f : v.health_max > 1 ? 1 : v.health_max;
         box(x0 + 3, y0 + 4, x1 + 4, y1 + 5, 0, 0x50000000u);
         box(x0 - 2.5f, y0 - 2.5f, x1 + 2.5f, y1 + 2.5f, 0, 0xFF1A1A1Au);
         box(x0, y0, x1, y1, 0, 0xFF5E6264u);
+        box(x0, y0, x0 + (x1 - x0) * m, y1, 0, 0xFF101010u); /* lost health, up to this character's maximum */
         if (f > 0) {
             box(x0, y0, xf, y1, 0, 0xFFF2B705u);
             box(x0, y0, xf, y0 + (y1 - y0) * 0.4f, 0, 0xFFFFD34Du);
