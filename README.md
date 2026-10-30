@@ -69,6 +69,7 @@ Press **F1**, or **Back and Start together** on a controller, at any time. The g
 - **Anti-aliasing** (2x, 4x or 8x MSAA) for smooth edges on the outlines and the city.
 - **Sharper textures** with anisotropic filtering (great on floors and roads at an angle).
 - **Cleaner 2D**: no dark fringes or stray lines around text and menus at high resolutions.
+- **A smoother, clearer boost**: on the Xbox the boost picture only changes every other frame and ghosts over the last one; ReJet shows a fresh, clear picture every frame (Display > Boost trails brings the original back).
 - **Volume control**, mute while you're in another window, an FPS counter, VSync.
 - **Smooth frame pacing**: on 60, 120 and 240 Hz displays every frame lines up with the screen's refresh, so motion stays even.
 - **Always 60 Hz**: the European disc's 50 Hz mode is gone, so the game always runs at full speed.
@@ -104,7 +105,6 @@ The full list lives in [docs/ENHANCEMENTS.md](docs/ENHANCEMENTS.md).
 ## Known issues
 
 - The player's shadow on the ground is missing (shadows on the environment are fine).
-- The boost effect looks a little darker than on the Xbox.
 - A few flickering dark patches on grind rails in the intro fly-through.
 - Mostly tested in the first part of the game; later levels, local multiplayer and custom soundtracks haven't been tried yet.
 - 60 fps only, as on the Xbox.

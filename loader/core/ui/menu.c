@@ -1428,6 +1428,8 @@ static Item g_display[] = {
            "Smooths jagged edges on outlines, buildings and rails. Higher settings cost more graphics card time."),
     CHOICE("Texture filtering", g_aniso_i, ANISO_NAMES, 0, changed_aniso,
            "Keeps textures sharp on surfaces seen at an angle, like floors and roads."),
+    TOGGLE("Boost trails", g_settings.boost_trails, 0, changed_save,
+           "The ghostly trails behind everything while you boost, as on the Xbox. Off shows a clear picture."),
     TOGGLE("Show FPS", g_settings.show_fps, 0, changed_save, "Shows the frame rate in the top left corner."),
     TOGGLE("VSync", g_settings.vsync, 0, changed_display,
            "Matches frames to your monitor to stop screen tearing. Off can feel more responsive."),

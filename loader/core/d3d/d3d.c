@@ -2193,9 +2193,37 @@ static void set_target_metrics(UINT w, UINT h, float sx, float sy)
     IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_SCISSORTESTENABLE, FALSE);
 }
 
+/* The boost draws the scene into its 512x512 target and its 128x128 one on alternate frames,
+ * and its full-screen picture always shows the 512x512: the picture moves at 30 fps while the
+ * game runs at 60 (the user: "like half animation speed"). With Boost trails off, the 128x128
+ * frames are drawn into the 512x512 target too and shrunk into the small one afterwards, for
+ * the blur that samples it: a new picture every frame. */
+static const RenderTarget *g_rt_shrink_to; /* the small target being drawn through the big one */
+
+static const RenderTarget *boost_big_target(const RenderTarget *r)
+{
+    if (g_settings.boost_trails || r->w != 128 || r->h != 128)
+        return NULL;
+    for (unsigned i = 0; i < g_rt_count; i++)
+        if (g_rt[i].w == 512 && g_rt[i].h == 512 && g_rt[i].format == r->format)
+            return &g_rt[i];
+    return NULL;
+}
+
+static void boost_shrink_done(void)
+{
+    const RenderTarget *big;
+    if (!g_rt_shrink_to)
+        return;
+    big = boost_big_target(g_rt_shrink_to);
+    if (big)
+        IDirect3DDevice9Ex_StretchRect(g_dev, big->surf, NULL, g_rt_shrink_to->surf, NULL, D3DTEXF_LINEAR);
+    g_rt_shrink_to = NULL;
+}
+
 static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, XD3DSurface *pNewZStencil)
 {
-    const RenderTarget *r;
+    const RenderTarget *r, *big;
     {
         SURVEY(12)
         log_printf("survey: SetRenderTarget %p%s fmt %08X size %08X, z %p%s (from %08X)\n", (void *)pRenderTarget,
@@ -2210,6 +2238,7 @@ static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, X
                 pNewZStencil ? "yes" : "none", (unsigned)(UINT_PTR)_ReturnAddress());
     if (!g_dev || !pRenderTarget)
         return S_OK;
+    boost_shrink_done();
     if (pRenderTarget == &g_backbuffer) {
         if (g_cur_rt) {
             IDirect3DDevice9Ex_SetRenderTarget(g_dev, 0, g_host_bb);
@@ -2225,6 +2254,15 @@ static HRESULT XBAPI hle_D3DDevice_SetRenderTarget(XD3DSurface *pRenderTarget, X
     r = rt_get(pRenderTarget);
     if (!r)
         return S_OK;
+    big = boost_big_target(r);
+    if (big) {
+        IDirect3DDevice9Ex_SetRenderTarget(g_dev, 0, big->surf);
+        IDirect3DDevice9Ex_SetDepthStencilSurface(g_dev, pNewZStencil ? big->depth : NULL);
+        g_cur_rt = r;
+        g_rt_shrink_to = r;
+        set_target_metrics(r->w, r->h, (float)big->hw / (float)r->w, (float)big->hh / (float)r->h);
+        return S_OK;
+    }
     IDirect3DDevice9Ex_SetRenderTarget(g_dev, 0, r->surf);
     IDirect3DDevice9Ex_SetDepthStencilSurface(g_dev, pNewZStencil ? r->depth : NULL);
     g_cur_rt = r;
@@ -2289,6 +2327,7 @@ static void change_display(void)
             IDirect3DDevice9Ex_SetLight(g_dev, i, &g_light[i]);
         IDirect3DDevice9Ex_LightEnable(g_dev, i, g_light_on[i]);
     }
+    g_rt_shrink_to = NULL; /* the rest of this pass goes to the small target itself */
     if (g_cur_rt) {
         IDirect3DDevice9Ex_SetRenderTarget(g_dev, 0, g_cur_rt->surf);
         IDirect3DDevice9Ex_SetDepthStencilSurface(g_dev, g_cur_rt->depth);
@@ -3093,10 +3132,32 @@ static void find_game_callers(const void *frame)
     }
 }
 
+/* The boost's speed trails: while boosting the game draws the scene into a render target, then
+ * lays it over the previous frame at half opacity as one full-screen pre-transformed quad
+ * (FVF 0x1C4). Half of each frame is the last one, so motion smears (the user: it makes the
+ * boost look slower), and the half that should be the last frame comes out darker here. With
+ * Boost trails off (the default) that quad is drawn opaque: the plain scene. */
+static int boost_composite(const BYTE *verts, UINT count, UINT stride, const WORD *idx)
+{
+    float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f;
+    if (g_cur_rt || g_cur_vs != 0x1C4 || count != 4 || idx || !g_rs[D3DRS_ALPHABLENDENABLE] || !g_textures[0] ||
+        !rt_find(g_textures[0]->Resource.Data))
+        return 0;
+    for (UINT v = 0; v < 4; v++) {
+        const float *q = (const float *)(verts + (SIZE_T)v * stride);
+        x0 = q[0] < x0 ? q[0] : x0;
+        x1 = q[0] > x1 ? q[0] : x1;
+        y0 = q[1] < y0 ? q[1] : y0;
+        y1 = q[1] > y1 ? q[1] : y1;
+    }
+    return x0 <= 0.5f && y0 <= 0.5f && x1 >= (float)g_xw - 0.5f && y1 >= (float)g_xh - 0.5f;
+}
+
 static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, const WORD *idx)
 {
     D3DPRIMITIVETYPE pt;
     UINT prims, lo = 0, hi = 0;
+    int boost_trails_off;
     /* quad batches for inset_quad_texcoords: triangle-list pairs, or quad lists */
     UINT group = idx ? 0 : (xprim == 5 && count % 6 == 0) ? 6 : (xprim == 8 && count % 4 == 0) ? 4 : 0;
     int quads;
@@ -3139,6 +3200,15 @@ static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, con
             IDirect3DDevice9Ex_SetPixelShader(g_dev, NULL);
         }
     }
+    if (!g_settings.boost_trails && !g_cur_rt) /* the boost's blur overlay, drawn from the small target */
+        for (int s = 0; s < 4; s++) {
+            const RenderTarget *r = g_textures[s] ? rt_find(g_textures[s]->Resource.Data) : NULL;
+            if (r && boost_big_target(r))
+                return;
+        }
+    boost_trails_off = !g_settings.boost_trails && boost_composite(verts, count, stride, idx);
+    if (boost_trails_off)
+        IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_ALPHABLENDENABLE, FALSE);
     if (quads) {
         UINT q = count / 4;
         if (q > 65536 / 4)
@@ -3172,6 +3242,8 @@ static void draw_up(DWORD xprim, UINT count, const BYTE *verts, UINT stride, con
         verts = fix_ff_vertices(verts, 0, count - 1, stride);
         IDirect3DDevice9Ex_DrawPrimitiveUP(g_dev, pt, prims, verts, stride);
     }
+    if (boost_trails_off)
+        IDirect3DDevice9Ex_SetRenderState(g_dev, D3DRS_ALPHABLENDENABLE, g_rs[D3DRS_ALPHABLENDENABLE]);
     perf_end(PERF_DRAW, t0);
 }
 

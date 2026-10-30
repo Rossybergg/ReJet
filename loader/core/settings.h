@@ -26,6 +26,7 @@ typedef struct Settings {
     int show_fps;      /* frame-rate counter in the corner */
     int antialiasing;  /* MSAA samples: 1 = off (default, as the Xbox), 2, 4 or 8 */
     int hud_style;     /* 0 = Classic (the game's own HUD), 1 = ReJet (our HUD, docs/HUD.md) */
+    int boost_trails;  /* 1 = the boost's half-opacity speed trails (the Xbox's); 0 = the plain scene (default, the user's choice) */
     /* [Audio] */
     int volume;             /* master volume in percent (default 100) */
     int mute_in_background; /* silent while another program has the focus */

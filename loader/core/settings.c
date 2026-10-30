@@ -12,7 +12,7 @@
 Settings g_settings = {
     .width = 1280, .height = 960, .window_height = 960, .aspect = ASPECT_4_3,
     .vsync = 0, /* host vsync off: the emulated vblank paces the game */
-    .fullscreen = 0, .anisotropy = 1, .show_fps = 0, .antialiasing = 1, .hud_style = 0,
+    .fullscreen = 0, .anisotropy = 1, .show_fps = 0, .antialiasing = 1, .hud_style = 0, .boost_trails = 0,
     .volume = 100, .mute_in_background = 0,
     .language = GAME_LANG_ENGLISH,
 };
@@ -60,6 +60,7 @@ void settings_load(void)
     GET("Display", "ShowFPS", show_fps, 0, 1);
     GET("Display", "Antialiasing", antialiasing, 1, 8);
     GET("Display", "Hud", hud_style, 0, 1);
+    GET("Display", "BoostTrails", boost_trails, 0, 1);
     GET("Audio", "Volume", volume, 0, 100);
     GET("Audio", "MuteInBackground", mute_in_background, 0, 1);
     GET("Console", "Language", language, GAME_LANG_JAPANESE, GAME_LANG_ITALIAN);
@@ -89,6 +90,7 @@ void settings_save(void)
     PUT("Display", "ShowFPS", show_fps);
     PUT("Display", "Antialiasing", antialiasing);
     PUT("Display", "Hud", hud_style);
+    PUT("Display", "BoostTrails", boost_trails);
     PUT("Audio", "Volume", volume);
     PUT("Audio", "MuteInBackground", mute_in_background);
     PUT("Console", "Language", language);
