@@ -156,16 +156,17 @@ def check_setup(iso):
         with open(ini, "w") as f:
             f.write(SETTINGS)  # no [Game] Folder: the setup screen must find the game
         # REJET_GAMEDIR: extract into the temporary folder, not the shared %LOCALAPPDATA%\rejet\Game
-        # (which a player's install may already have, so setup would be skipped)
+        # (which a player's install may already have, so setup would be skipped). Two levels that don't
+        # exist yet, like a PC that has never run ReJet: 0.5.0's space check failed there.
+        game = os.path.join(tmp, "rejet", "Game")
         env = dict(os.environ, REJET_INI=ini, REJET_SETUP_IMAGE=iso, REJET_RUNSECONDS=str(SETUP_SECONDS),
-                   REJET_SKIPWARNING="1", REJET_GAMEDIR=os.path.join(tmp, "Game"))
+                   REJET_SKIPWARNING="1", REJET_GAMEDIR=game)
         print(f"  ....  first-run setup from a fresh folder (extracts the disc; a window opens)")
         r = subprocess.run([os.path.join(tmp, "ReJet.exe")], cwd=tmp, env=env, timeout=1800)
         log = open(os.path.join(tmp, "loader.log"), errors="replace").read() if os.path.isfile(
             os.path.join(tmp, "loader.log")) else ""
         cfg = configparser.ConfigParser()
         cfg.read(ini)
-        game = os.path.join(tmp, "Game")
         ok = step("setup extracts the game", "setup: extracted" in log and
                   os.path.isfile(os.path.join(game, "default.xbe")),
                   next((l for l in log.splitlines() if l.startswith("setup: extracted")), "no extraction in the log"))
