@@ -285,3 +285,10 @@ Plan for the next alpha in `docs/ALPHA2_PLAN.md` (baseline and release gate, the
 - **The graffiti warning can be skipped** with Start or A (any controller, or Enter/Space/Z), like the logos: ReJet recognises the warning's picture by its texture name (C2BC81234870958A, `tex_name`) and stops waiting for vblanks until it is gone, so the game's own frame-counted timer runs out at once. `REJET_SKIPWARNING=1` skips it without a press.
 - **Debugging tools:** captures list each draw's game callers, texture name and, for 2D and HUD draws, the widescreen squeeze; `REJET_MEMDUMP` and `tools/memdiff.py` find game values from how they change between F10 markers (the can count: 0 -> 7 -> 6 matched; its address moves between sessions, so the cheat needs a pointer path, not done).
 
+
+## 2026-11-01 — 0.5.1: first-time setup on a fresh PC
+
+- **Reported** (a tester's first install of 0.5.0): choosing the disc image said there wasn't enough space with about 100 GB free; extracting by hand and choosing the folder worked.
+- **Cause:** setup checked free space on `%LOCALAPPDATA%\rejet\Game` before creating it. On a PC that has never run ReJet, neither that folder nor `rejet` exists, `GetDiskFreeSpaceExW` fails for a missing folder, and the free space stayed 0. Never seen here because this PC already has `rejet` (the saves), and the gate extracted into a folder that existed.
+- **Fix:** create the folders first; if the space still can't be measured, log it and extract anyway (a full disk fails clearly while writing). The message names the folder.
+- **Test:** the gate's setup step now extracts into `tmp\rejet\Game`, two missing levels like a fresh PC. Checked by hand: 3505 files (2406 MB) extracted, the game boots.
