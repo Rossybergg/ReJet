@@ -22,6 +22,7 @@
 #include <wchar.h>
 
 #include "hle.h"
+#include "kernel.h"
 #include "iso.h"
 #include "kernel.h"
 #include "settings.h"
@@ -128,31 +129,30 @@ static DWORD WINAPI extract_thread(void *arg)
         }
         free(data);
     }
-    if (ok && GetDiskFreeSpaceExW(g_target, &free_bytes, NULL, NULL) == 0) {
+    if (ok) { /* first: on a fresh PC neither %LOCALAPPDATA%\rejet nor Game exists, and the space check
+                 below can't measure a folder that doesn't exist (0.5.0 said "not enough space") */
         WCHAR parent[MAX_PATH], *slash;
         wcscpy_s(parent, MAX_PATH, g_target);
-        if ((slash = wcsrchr(parent, L'\\')) != NULL)
-            *slash = 0;
-        GetDiskFreeSpaceExW(parent, &free_bytes, NULL, NULL);
-    }
-    if (ok && free_bytes.QuadPart < iso->total + (64ull << 20)) {
-        WCHAR msg[256];
-        swprintf(msg, 256, L"There isn't enough free space. The game needs about %.1f GB on the drive ReJet is on.",
-                 (double)iso->total / (1 << 30));
-        fail(msg);
-        ok = 0;
-    }
-    g_total_bytes = (LONGLONG)iso->total;
-    g_done_bytes = 0;
-    if (ok) {
-        WCHAR parent[MAX_PATH], *slash;
-        wcscpy_s(parent, MAX_PATH, g_target); /* %LOCALAPPDATA%\rejet may not exist yet */
         if ((slash = wcsrchr(parent, L'\\')) != NULL) {
             *slash = 0;
             CreateDirectoryW(parent, NULL);
         }
         CreateDirectoryW(g_target, NULL);
     }
+    if (ok && !GetDiskFreeSpaceExW(g_target, &free_bytes, NULL, NULL)) {
+        log_printf("setup: couldn't measure free space at %ls (error %lu); extracting anyway\n", g_target,
+                   GetLastError());
+        free_bytes.QuadPart = ~0ull; /* a full disk still fails clearly while writing */
+    }
+    if (ok && free_bytes.QuadPart < iso->total + (64ull << 20)) {
+        WCHAR msg[256];
+        swprintf(msg, 256, L"There isn't enough free space. The game needs about %.1f GB on your Windows drive "
+                 L"(it goes in %%LOCALAPPDATA%%\\rejet\\Game).", (double)iso->total / (1 << 30));
+        fail(msg);
+        ok = 0;
+    }
+    g_total_bytes = (LONGLONG)iso->total;
+    g_done_bytes = 0;
     for (unsigned i = 0; ok && i < iso->n && !g_cancel; i++) {
         const IsoFile *e = &iso->files[i];
         WCHAR out[MAX_PATH];
